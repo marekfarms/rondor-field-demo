@@ -1,0 +1,15 @@
+# Netlify deploy settings for the Rondor Excavations field app.
+# This is a static site (no build step). Deploy by dragging the folder
+# into Netlify Drop, or:  netlify deploy --prod --dir=.
+
+[build]
+  publish = "."
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    # The app needs camera + geolocation for photo logging.
+    Permissions-Policy = "camera=(self), geolocation=(self)"

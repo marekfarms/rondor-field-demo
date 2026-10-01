@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1B3A8B">
+<title>Rondor Excavations — Quote</title>
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="assets/logo.png">
+</head>
+<body>
+<div id="app"><div class="wrap"><div class="card"><p class="muted">Loading quote…</p></div></div></div>
+<script src="config.js"></script>
+<script src="assets/data.js"></script>
+<script src="assets/calc.js"></script>
+<script src="assets/store.js"></script>
+<script>
+/* Customer magic-link page. No login. Token-gated via SECURITY DEFINER
+   functions (live) or localStorage lookup (demo). Shows the CUSTOMER
+   version only: one line per section, no internal detail. */
+(async () => {
+  const $ = s => document.querySelector(s);
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+  const money = window.RondorCalc.money;
+  const params = new URLSearchParams(location.search);
+  const qt = params.get('t'), cot = params.get('co');
+  const Store = await window.RondorStore.init();
+
+  const hero = `
+    <div class="accept-hero">
+      <img src="assets/logo.png" alt="Rondor Excavations Ltd."><br><br>
+      <div style="font-weight:800;font-size:1.2rem">Rondor Excavations Ltd.</div>
+      <div style="font-size:.8rem;opacity:.85">NOT THE BIGGEST, BUT AMONG THE BEST · OVER 30 YEARS</div>
+    </div>`;
+
+  function shell(inner) { $('#app').innerHTML = hero + '<div class="wrap">' + inner + '</div>'; }
+  const err = m => shell(`<div class="card"><div class="err">${esc(m)}</div><p class="muted">This link may have expired or already been used. Please contact Rondor Excavations at 204.791.4905.</p></div>`);
+
+  try {
+    if (qt) {
+      const q = await Store.publicQuote(qt);
+      if (!q) return err('Quote link not recognized.');
+      const rows = (q.job_lines || []).map(j =>
+        `<tr><td>${esc(j.name)}</td><td class="n">${money(j.total)}</td></tr>`).join('');
+      const already = q.status === 'accepted';
+      shell(`<div class="card">
+        <h2>Quotation ${esc(q.number)}</h2>
+        <p class="muted">Prepared for <b>${esc(q.customer_name)}</b>${q.work_date ? ' · Work date: ' + esc(q.work_date) : ''}</p>
+        ${already ? `<div class="okmsg">✅ Accepted by ${esc(q.accepted_by || '')} on ${esc((q.accepted_at || '').slice(0, 10))}. Thank you!</div>` : ''}
+        <table class="plain"><tr><th>Scope of work</th><th class="n">Amount</th></tr>${rows}
+        <tr><td>Administrative permits</td><td class="n">${money(q.admin_permits)}</td></tr>
+        ${+q.frost ? `<tr><td>Frost surcharge (25% — work Dec 1 to Mar 31)</td><td class="n">${money(q.frost)}</td></tr>` : ''}
+        <tr><td><b>Total (GST not included)</b></td><td class="n"><b>${money(q.total)}</b></td></tr></table>
+        <h3>Terms and Conditions</h3><ol class="terms">${(q.terms || []).map(x => `<li>${esc(x)}</li>`).join('')}</ol>
+        ${already ? '' : `<div class="sigbox">
+          <h3>Accept this quote</h3>
+          <p class="muted small">Type your full name below — it acts as your signature, with today's date and time recorded.</p>
+          <label class="f">Full name</label><input id="aname" type="text" autocomplete="name" placeholder="Type your full name">
+          <button class="btn gold block" id="acceptbtn">Accept quote — ${money(q.total)}</button>
+          <div id="amsg" style="margin-top:8px"></div>
+        </div>`}
+      </div>`);
+      if (!already) $('#acceptbtn').addEventListener('click', async () => {
+        const name = $('#aname').value;
+        try {
+          const ok = await Store.acceptQuote(qt, name);
+          if (ok) location.reload();
+          else $('#amsg').innerHTML = '<div class="err">Please type your full name (2+ characters).</div>';
+        } catch (e) { $('#amsg').innerHTML = '<div class="err">' + esc(e.message) + '</div>'; }
+      });
+    } else if (cot) {
+      const co = await Store.publicCO(cot);
+      if (!co) return err('Change-order link not recognized.');
+      const done = co.status !== 'pending';
+      shell(`<div class="card">
+        <h2>Change order</h2>
+        <p class="muted">Job: <b>${esc(co.job_name)}</b></p>
+        <p>${esc(co.description)}</p>
+        <div class="kv"><span><b>Additional cost</b></span><span class="v">${money(co.price)}</span></div>
+        ${done ? `<div class="okmsg">${co.status === 'approved' ? '✅ Approved' : 'Declined'}${co.approved_by ? ' by ' + esc(co.approved_by) : ''}.</div>` : `
+        <div class="sigbox"><h3>Approve this change order</h3>
+          <p class="muted small">Type your full name — recorded with date and time.</p>
+          <label class="f">Full name</label><input id="aname" type="text" autocomplete="name">
+          <button class="btn gold block" id="cobtn">Approve — ${money(co.price)}</button>
+          <div id="amsg" style="margin-top:8px"></div></div>`}
+      </div>`);
+      if (!done) $('#cobtn').addEventListener('click', async () => {
+        try {
+          const ok = await Store.approveCO(cot, $('#aname').value);
+          if (ok) location.reload();
+          else $('#amsg').innerHTML = '<div class="err">Please type your full name (2+ characters).</div>';
+        } catch (e) { $('#amsg').innerHTML = '<div class="err">' + esc(e.message) + '</div>'; }
+      });
+    } else {
+      err('No quote or change-order link was provided.');
+    }
+  } catch (e) { err('Could not load: ' + e.message); }
+})();
+</script>
+</body>
+</html>
