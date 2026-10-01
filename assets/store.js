@@ -82,7 +82,81 @@ window.RondorStore = (() => {
         accept_token: 'demo' + token().slice(4), accepted_at: null, accepted_by_name: null,
         created_at: new Date().toISOString() });
 
-      d.counter = { 2026: 2 };
+      // Customer 2 + Quote 3: 636 Dudley Ave — fed from EMCO/Sandale supplier
+      // quote Sep 16/26 (Todd Wood) and the site-plan takeoff.
+      d.customers.push({ id: 'demo-cust-2', owner_id: 'demo-admin', name: '636 Dudley Ave (6-plex)',
+        phone: '', email: '', address: '636 Dudley Ave, Winnipeg MB',
+        notes: 'Takeoff: 636 Dudley Ave site plan (14.4m 150mm WWS @1% to ex 375 clay; '
+          + '30m 1-1/2 in HDPE water service; 48.9m + branches 150mm LDS; CB1/CB3 + 4 inline drains; '
+          + '4 abandonments). Materials priced per EMCO quote Sep 16/26. Labour, permits and '
+          + 'trucking are provisional — confirm with Ryan.',
+        created_at: new Date().toISOString() });
+
+      // Quote 3 (draft): 636 Dudley Ave full underground
+      const e3 = Calc.blankEstimate();
+      e3.customerId = 'demo-cust-2';
+      e3.customer = { name: '636 Dudley Ave (6-plex)', phone: '', email: '', address: '636 Dudley Ave, Winnipeg MB' };
+      // 150mm wastewater: 14.4m @ 1.0% to existing 375 clay main
+      e3.jobs.wws150.included = true;
+      const L3w = e3.jobs.wws150.lines;
+      L3w.pipe1 = { qty: 18, price: 27.93 };
+      L3w.teesaddle = { qty: 1, price: 442.29 };
+      L3w.bends = { qty: 4, price: 48.62 };
+      L3w.trucking = { qty: 4 };
+      L3w.signage = { qty: 1 };
+      e3.jobs.wws150.labourQty = 2;
+      // water service (1-1/2 in HDPE, 30m)
+      e3.jobs.copper.included = true;
+      const L3c = e3.jobs.copper.lines;
+      L3c.pipe100 = { qty: 1, price: 669.30 };
+      L3c.saddle = { qty: 1, price: 202.63 };
+      L3c.bushing = { qty: 1, price: 107.93 };
+      L3c.mainstop = { qty: 1, price: 214.53 };
+      L3c.curbstop = { qty: 1, price: 358.40 };
+      L3c.inserts = { qty: 3 };
+      L3c.servicebox = { qty: 1, price: 659.26 };
+      L3c.servicerod = { qty: 1 };
+      e3.jobs.copper.labourQty = 1.5;
+      // land drainage: 48.9m main + 2.6/4.2/5.7/7.2/4.8m branches, tank + ICD
+      e3.jobs.lds250.included = true;
+      const L3l = e3.jobs.lds250.lines;
+      L3l.pipe1 = { qty: 68, price: 27.93 };
+      L3l.pipe2 = { qty: 8, price: 27.93 };
+      L3l.tee1 = { qty: 1, price: 442.29 };
+      L3l.bends = { qty: 8, price: 48.62 };
+      L3l.ells90 = { qty: 2 };
+      L3l.tee2 = { qty: 2, price: 100.72 };
+      L3l.tank = { qty: 1 };
+      L3l.riser60 = { qty: 1 };
+      L3l.riser24 = { qty: 1 };
+      L3l.icd = { qty: 1 };
+      L3l.trucking = { qty: 6 };
+      e3.jobs.lds250.labourQty = 3;
+      // catchbasins: CB1 (475D) + CB3 (750D) + 4 inline drains w/ frames
+      e3.jobs.catchbasin.included = true;
+      const L3b = e3.jobs.catchbasin.lines;
+      L3b.cb1 = { qty: 1 };
+      L3b.cb2 = { qty: 1 };
+      L3b.inlinedrain = { qty: 4 };
+      L3b.framecover = { qty: 2, price: 1399.00 };
+      e3.jobs.catchbasin.labourQty = 2;
+      // abandonments: 2 sewer + 2 water per plan
+      e3.jobs.abandon.included = true;
+      const L3a = e3.jobs.abandon.lines;
+      L3a.sand = { qty: 4 };
+      L3a.debloplug = { qty: 4 };
+      L3a.repairclamp = { qty: 2 };
+      L3a.trucking = { qty: 2 };
+      e3.jobs.abandon.labourQty = 2;
+      e3.adminPermits.lines = { cutpermit: { qty: 2 } };
+      const t3 = Calc.quoteTotals(e3, d.prices);
+      d.quotes.push({ id: 'demo-quote-3', owner_id: 'demo-admin', customer_id: 'demo-cust-2',
+        number: 'R-2026-0003', status: 'draft', work_date: Calc.todayISO(), frost_applies: t3.frostApplies,
+        estimate: e3, totals: t3, terms: C.terms.slice(), snapshot_html: '',
+        accept_token: 'demo' + token().slice(4), accepted_at: null, accepted_by_name: null,
+        created_at: new Date().toISOString() });
+
+      d.counter = { 2026: 3 };
       d.jobs.push({ id: 'demo-job-1', owner_id: 'demo-admin', customer_id: 'demo-cust-1',
         quote_id: 'demo-quote-2', name: 'Johnson — sewer replacement', address: '42 Maple Ave, Winnipeg MB',
         status: 'active', assigned_worker_ids: ['demo-user'], created_at: new Date().toISOString() });

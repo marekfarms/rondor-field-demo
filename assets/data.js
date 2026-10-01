@@ -369,6 +369,46 @@ window.RONDOR_DATA = {
    "key": "lot_grading_permit_com",
    "label": "Lot grading permit COM",
    "price": 411
+  },
+  {
+   "key": "inserts_emco",
+   "label": "CTS SS inserts (EMCO)",
+   "price": 4.06
+  },
+  {
+   "key": "servicerod_emco",
+   "label": "Service box rod 6ft (EMCO)",
+   "price": 100.0
+  },
+  {
+   "key": "ells90_emco",
+   "label": "90-degree ells 150mm (EMCO)",
+   "price": 60.84
+  },
+  {
+   "key": "tank_emco",
+   "label": "Holding tank DuraCon SW1500 (EMCO)",
+   "price": 5312.5
+  },
+  {
+   "key": "riser60_emco",
+   "label": "Concrete riser 30x60 (EMCO)",
+   "price": 531.25
+  },
+  {
+   "key": "riser24_emco",
+   "label": "Concrete riser 30x24 (EMCO)",
+   "price": 340.0
+  },
+  {
+   "key": "icd_emco",
+   "label": "ICD valve Tempest LMF (EMCO)",
+   "price": 1273.6
+  },
+  {
+   "key": "inlinedrain_emco",
+   "label": "Inline drain w/ grate (EMCO)",
+   "price": 270.77
   }
  ],
  "jobs": [
@@ -682,6 +722,27 @@ window.RONDOR_DATA = {
        "markup": 1.08,
        "editablePrice": false,
        "note": "",
+       "qty": 0
+      }
+     ,
+      {
+       "key": "inserts",
+       "label": "CTS SS inserts",
+       "priceKey": "inserts_emco",
+       "unit": "each",
+       "markup": 1.08,
+       "editablePrice": true,
+       "note": "EMCO Sep 16/26",
+       "qty": 0
+      },
+      {
+       "key": "servicerod",
+       "label": "Service box rod (6ft 304SS)",
+       "priceKey": "servicerod_emco",
+       "unit": "each",
+       "markup": 1.08,
+       "editablePrice": true,
+       "note": "EMCO Sep 16/26",
        "qty": 0
       }
      ]
@@ -1682,6 +1743,57 @@ window.RONDOR_DATA = {
        "note": "",
        "qty": 0
       }
+     ,
+      {
+       "key": "ells90",
+       "label": "90-degree ells",
+       "priceKey": "ells90_emco",
+       "unit": "each",
+       "markup": 1.08,
+       "editablePrice": true,
+       "note": "EMCO Sep 16/26",
+       "qty": 0
+      },
+      {
+       "key": "tank",
+       "label": "Holding tank (DuraCon SW1500)",
+       "priceKey": "tank_emco",
+       "unit": "each",
+       "markup": 1.08,
+       "editablePrice": true,
+       "note": "EMCO Sep 16/26",
+       "qty": 0
+      },
+      {
+       "key": "riser60",
+       "label": "Concrete riser 30x60",
+       "priceKey": "riser60_emco",
+       "unit": "each",
+       "markup": 1.08,
+       "editablePrice": true,
+       "note": "EMCO Sep 16/26",
+       "qty": 0
+      },
+      {
+       "key": "riser24",
+       "label": "Concrete riser 30x24",
+       "priceKey": "riser24_emco",
+       "unit": "each",
+       "markup": 1.08,
+       "editablePrice": true,
+       "note": "EMCO Sep 16/26",
+       "qty": 0
+      },
+      {
+       "key": "icd",
+       "label": "ICD valve (Tempest LMF)",
+       "priceKey": "icd_emco",
+       "unit": "each",
+       "markup": 1.08,
+       "editablePrice": true,
+       "note": "EMCO Sep 16/26",
+       "qty": 0
+      }
      ]
     }
    ]
@@ -2031,6 +2143,17 @@ window.RONDOR_DATA = {
        "markup": 1.0,
        "editablePrice": false,
        "note": "12 yds/load \u2014 no markup (per workbook)",
+       "qty": 0
+      }
+     ,
+      {
+       "key": "inlinedrain",
+       "label": "Inline drain w/ grate",
+       "priceKey": "inlinedrain_emco",
+       "unit": "each",
+       "markup": 1.08,
+       "editablePrice": true,
+       "note": "EMCO Sep 16/26",
        "qty": 0
       }
      ]
