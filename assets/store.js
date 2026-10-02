@@ -1,14 +1,16 @@
 /* Rondor Excavations — data layer.
    One interface, two backends:
-     DemoStore  — zero-setup, everything in localStorage. Used when
-                  config.DEMO_MODE is true or no Supabase keys are set.
-     LiveStore  — Supabase (Postgres + Auth + Storage). Same UI.
-   The app only ever talks to `Store`. */
+     LocalStore  — zero-setup, everything in localStorage. Used when
+                   config.DEMO_MODE is true or no Supabase keys are set.
+     LiveStore   — Supabase (Postgres + Auth + Storage). Same UI.
+   The app only ever talks to `Store`.
+   Parked documents live in IndexedDB (too big for localStorage); see `Docs`. */
 window.RondorStore = (() => {
   const C = window.RONDOR_DATA, Calc = window.RondorCalc;
-  const LS_KEY = 'rondor_demo_v1';
+  const LS_KEY = 'rondor_app_v2';
   const DRAFT_KEY = 'rondor_draft';
   const OUTBOX_DB = 'rondor_outbox';
+  const DOCS_DB = 'rondor_docs';
 
   const uid = (p) => (p || 'x').replace(/[^a-z0-9]/gi, '').slice(0, 8) +
     Date.now().toString(36).slice(-4) + Math.random().toString(36).slice(2, 6);
@@ -21,9 +23,9 @@ window.RondorStore = (() => {
     return m;
   }
 
-  /* ================= DEMO STORE ================= */
-  class DemoStore {
-    constructor() { this.mode = 'demo'; this._cbs = []; }
+  /* ================= LOCAL STORE ================= */
+  class LocalStore {
+    constructor() { this.mode = 'local'; this._cbs = []; }
     _load() {
       let d = null;
       try { d = JSON.parse(localStorage.getItem(LS_KEY)); } catch (e) {}
@@ -35,134 +37,15 @@ window.RondorStore = (() => {
     onAuth(cb) { this._cbs.push(cb); }
 
     _seed() {
+      // Fresh production install: two fixed accounts, the workbook default
+      // price list, and nothing else. No sample customers, quotes, or jobs.
       const d = { seeded: true, profiles: [], customers: [], quotes: [],
                   jobs: [], cos: [], actuals: [], photos: [],
                   prices: defaultPrices(), counter: {}, session: null };
       d.profiles.push(
-        { id: 'demo-admin', email: 'admin', display_name: 'Owner (demo)', role: 'owner', created_at: new Date().toISOString() },
-        { id: 'demo-user', email: 'user', display_name: 'Field worker (demo)', role: 'worker', created_at: new Date().toISOString() }
+        { id: 'demo-admin', email: 'admin', display_name: 'Owner', role: 'owner', created_at: new Date().toISOString() },
+        { id: 'demo-user', email: 'user', display_name: 'Field worker', role: 'worker', created_at: new Date().toISOString() }
       );
-      d.customers.push({ id: 'demo-cust-1', owner_id: 'demo-admin', name: 'Sarah Johnson',
-        phone: '204-555-0147', email: 'sarah.j@example.com', address: '42 Maple Ave, Winnipeg MB',
-        notes: 'Demo customer', created_at: new Date().toISOString() });
-
-      // Quote 1 (draft): copper service with a few quantities
-      const e1 = Calc.blankEstimate();
-      e1.customerId = 'demo-cust-1';
-      e1.customer = { name: 'Sarah Johnson', phone: '204-555-0147', email: 'sarah.j@example.com', address: '42 Maple Ave, Winnipeg MB' };
-      e1.jobs.copper.included = true;
-      const L1 = e1.jobs.copper.lines;
-      L1.perm_blvd = { qty: 6 }; L1.perm_close3 = { qty: 1 }; L1.signage = { qty: 1 };
-      L1.sawcut = { qty: 1 }; L1.stabfill = { qty: 2 }; L1.sand = { qty: 3 };
-      L1.saddle = { qty: 1 }; L1.mainstop = { qty: 1 }; L1.pipe66 = { qty: 2 };
-      L1.couplings = { qty: 4 }; L1.curbstop = { qty: 1 }; L1.servicebox = { qty: 1 };
-      e1.jobs.copper.labourQty = 1;
-      const t1 = Calc.quoteTotals(e1, d.prices);
-      d.quotes.push({ id: 'demo-quote-1', owner_id: 'demo-admin', customer_id: 'demo-cust-1',
-        number: 'R-2026-0001', status: 'draft', work_date: Calc.todayISO(), frost_applies: t1.frostApplies,
-        estimate: e1, totals: t1, terms: C.terms.slice(), snapshot_html: '',
-        accept_token: null, accepted_at: null, accepted_by_name: null,
-        created_at: new Date().toISOString() });
-
-      // Quote 2 (sent): 150mm wastewater sewer
-      const e2 = Calc.blankEstimate();
-      e2.customerId = 'demo-cust-1'; e2.customer = { ...e1.customer };
-      e2.jobs.wws150.included = true;
-      const L2 = e2.jobs.wws150.lines;
-      L2.perm_blvd = { qty: 8 }; L2.perm_pave = { qty: 4 }; L2.signage = { qty: 2 };
-      L2.trucking = { qty: 6 }; L2.maintap = { qty: 1, price: 850 }; L2.televmain = { qty: 1 };
-      L2.stabfill = { qty: 3 }; L2.sand = { qty: 5 }; L2.teesaddle = { qty: 1 };
-      L2.pipe1 = { qty: 10 }; L2.bends = { qty: 4, price: 24.18 };
-      e2.jobs.wws150.labourQty = 1.5;
-      e2.adminPermits.lines = { cutpermit: { qty: 1 }, sapp_res: { qty: 1 } };
-      const t2 = Calc.quoteTotals(e2, d.prices);
-      d.quotes.push({ id: 'demo-quote-2', owner_id: 'demo-admin', customer_id: 'demo-cust-1',
-        number: 'R-2026-0002', status: 'sent', work_date: Calc.todayISO(), frost_applies: t2.frostApplies,
-        estimate: e2, totals: t2, terms: C.terms.slice(), snapshot_html: '',
-        accept_token: 'demo' + token().slice(4), accepted_at: null, accepted_by_name: null,
-        created_at: new Date().toISOString() });
-
-      // Customer 2 + Quote 3: 636 Dudley Ave — fed from EMCO/Sandale supplier
-      // quote Sep 16/26 (Todd Wood) and the site-plan takeoff.
-      d.customers.push({ id: 'demo-cust-2', owner_id: 'demo-admin', name: '636 Dudley Ave (6-plex)',
-        phone: '', email: '', address: '636 Dudley Ave, Winnipeg MB',
-        notes: 'Takeoff: 636 Dudley Ave site plan (14.4m 150mm WWS @1% to ex 375 clay; '
-          + '30m 1-1/2 in HDPE water service; 48.9m + branches 150mm LDS; CB1/CB3 + 4 inline drains; '
-          + '4 abandonments). Materials priced per EMCO quote Sep 16/26. Labour, permits and '
-          + 'trucking are provisional — confirm with Ryan.',
-        created_at: new Date().toISOString() });
-
-      // Quote 3 (draft): 636 Dudley Ave full underground
-      const e3 = Calc.blankEstimate();
-      e3.customerId = 'demo-cust-2';
-      e3.customer = { name: '636 Dudley Ave (6-plex)', phone: '', email: '', address: '636 Dudley Ave, Winnipeg MB' };
-      // 150mm wastewater: 14.4m @ 1.0% to existing 375 clay main
-      e3.jobs.wws150.included = true;
-      const L3w = e3.jobs.wws150.lines;
-      L3w.pipe1 = { qty: 18, price: 27.93 };
-      L3w.teesaddle = { qty: 1, price: 442.29 };
-      L3w.bends = { qty: 4, price: 48.62 };
-      L3w.trucking = { qty: 4 };
-      L3w.signage = { qty: 1 };
-      e3.jobs.wws150.labourQty = 2;
-      // water service (1-1/2 in HDPE, 30m)
-      e3.jobs.copper.included = true;
-      const L3c = e3.jobs.copper.lines;
-      L3c.pipe100 = { qty: 1, price: 669.30 };
-      L3c.saddle = { qty: 1, price: 202.63 };
-      L3c.bushing = { qty: 1, price: 107.93 };
-      L3c.mainstop = { qty: 1, price: 214.53 };
-      L3c.curbstop = { qty: 1, price: 358.40 };
-      L3c.inserts = { qty: 3 };
-      L3c.servicebox = { qty: 1, price: 659.26 };
-      L3c.servicerod = { qty: 1 };
-      e3.jobs.copper.labourQty = 1.5;
-      // land drainage: 48.9m main + 2.6/4.2/5.7/7.2/4.8m branches, tank + ICD
-      e3.jobs.lds250.included = true;
-      const L3l = e3.jobs.lds250.lines;
-      L3l.pipe1 = { qty: 68, price: 27.93 };
-      L3l.pipe2 = { qty: 8, price: 27.93 };
-      L3l.tee1 = { qty: 1, price: 442.29 };
-      L3l.bends = { qty: 8, price: 48.62 };
-      L3l.ells90 = { qty: 2 };
-      L3l.tee2 = { qty: 2, price: 100.72 };
-      L3l.tank = { qty: 1 };
-      L3l.riser60 = { qty: 1 };
-      L3l.riser24 = { qty: 1 };
-      L3l.icd = { qty: 1 };
-      L3l.trucking = { qty: 6 };
-      e3.jobs.lds250.labourQty = 3;
-      // catchbasins: CB1 (475D) + CB3 (750D) + 4 inline drains w/ frames
-      e3.jobs.catchbasin.included = true;
-      const L3b = e3.jobs.catchbasin.lines;
-      L3b.cb1 = { qty: 1 };
-      L3b.cb2 = { qty: 1 };
-      L3b.inlinedrain = { qty: 4 };
-      L3b.framecover = { qty: 2, price: 1399.00 };
-      e3.jobs.catchbasin.labourQty = 2;
-      // abandonments: 2 sewer + 2 water per plan
-      e3.jobs.abandon.included = true;
-      const L3a = e3.jobs.abandon.lines;
-      L3a.sand = { qty: 4 };
-      L3a.debloplug = { qty: 4 };
-      L3a.repairclamp = { qty: 2 };
-      L3a.trucking = { qty: 2 };
-      e3.jobs.abandon.labourQty = 2;
-      e3.adminPermits.lines = { cutpermit: { qty: 2 } };
-      const t3 = Calc.quoteTotals(e3, d.prices);
-      d.quotes.push({ id: 'demo-quote-3', owner_id: 'demo-admin', customer_id: 'demo-cust-2',
-        number: 'R-2026-0003', status: 'draft', work_date: Calc.todayISO(), frost_applies: t3.frostApplies,
-        estimate: e3, totals: t3, terms: C.terms.slice(), snapshot_html: '',
-        accept_token: 'demo' + token().slice(4), accepted_at: null, accepted_by_name: null,
-        created_at: new Date().toISOString() });
-
-      d.counter = { 2026: 3 };
-      d.jobs.push({ id: 'demo-job-1', owner_id: 'demo-admin', customer_id: 'demo-cust-1',
-        quote_id: 'demo-quote-2', name: 'Johnson — sewer replacement', address: '42 Maple Ave, Winnipeg MB',
-        status: 'active', assigned_worker_ids: ['demo-user'], created_at: new Date().toISOString() });
-      d.cos.push({ id: 'demo-co-1', job_id: 'demo-job-1', owner_id: 'demo-admin',
-        description: 'Extra hydrovac for unmarked utility crossing', price: 650, status: 'pending',
-        token: null, approved_at: null, approved_by_name: null, created_at: new Date().toISOString() });
       return d;
     }
 
@@ -170,7 +53,7 @@ window.RondorStore = (() => {
     async signIn(id, password) {
       const d = this._load();
       const ok = (id === 'admin' && password === 'admin') || (id === 'user' && password === 'user');
-      if (!ok) throw new Error('Invalid demo login. Use admin/admin or user/user.');
+      if (!ok) throw new Error('Invalid login. Use admin/admin or user/user.');
       const pid = id === 'admin' ? 'demo-admin' : 'demo-user';
       d.session = { profileId: pid, at: Date.now() };
       this._session = d.session; this._save(d); this._emit();
@@ -180,7 +63,7 @@ window.RondorStore = (() => {
       const d = this._load(); d.session = null; this._session = null; this._save(d); this._emit();
     }
     session() { return this._session || this._load().session; }
-    async resetPassword() { throw new Error('Demo mode: password reset is a Supabase feature. Use admin/admin or user/user.'); }
+    async resetPassword() { throw new Error('Password reset needs the live backend. Accounts on this install are fixed: admin/admin, user/user.'); }
 
     /* ---- profiles ---- */
     async myProfile() {
@@ -311,7 +194,7 @@ window.RondorStore = (() => {
       });
       const me = await this.myProfile();
       const photo = { id: uid('p'), job_id: jobId, owner_id: 'demo-admin',
-        worker_id: me ? me.id : null, storage_path: 'demo/' + jobId + '/' + Date.now() + '.jpg',
+        worker_id: me ? me.id : null, storage_path: 'local/' + jobId + '/' + Date.now() + '.jpg',
         taken_at: meta.taken_at, lat: meta.lat, lng: meta.lng, note: meta.note || '',
         dataUrl, created_at: new Date().toISOString() };
       d.photos.push(photo); this._save(d); return photo;
@@ -329,7 +212,8 @@ window.RondorStore = (() => {
       const c = await this.getCustomer(q.customer_id);
       return { number: q.number, status: q.status, work_date: q.work_date,
         customer_name: c ? c.name : (q.estimate.customer || {}).name || '',
-        job_lines: q.totals.jobLines, admin_permits: q.totals.adminPermitsTotal,
+        job_lines: q.totals.jobLines, ai_lines: q.totals.aiLines || [],
+        ai_total: q.totals.aiLinesTotal || 0, admin_permits: q.totals.adminPermitsTotal,
         frost: q.totals.frostAmount, total: q.totals.grandTotal, terms: q.terms,
         accepted_at: q.accepted_at, accepted_by: q.accepted_by_name };
     }
@@ -621,7 +505,7 @@ window.RondorStore = (() => {
   let _store = null;
   async function init() {
     if (_store) return _store;
-    _store = isDemoMode() ? new DemoStore() : new LiveStore();
+    _store = isDemoMode() ? new LocalStore() : new LiveStore();
     if (_store.init) await _store.init();
     return _store;
   }
@@ -665,5 +549,62 @@ window.RondorStore = (() => {
     clear() { localStorage.removeItem(DRAFT_KEY); }
   };
 
-  return { init, isDemoMode, Outbox, Drafts, get store() { return _store; } };
+  /* ---- parked documents (IndexedDB — file blobs are too big for localStorage) ----
+     Docs are owner-only by UI routing. Each doc: {id, name, mime, size, blob,
+     jobId|null, quoteId|null, parkedAt}. */
+  const Docs = {
+    _db() {
+      return new Promise((res, rej) => {
+        const r = indexedDB.open(DOCS_DB, 1);
+        r.onupgradeneeded = () => {
+          if (!r.result.objectStoreNames.contains('docs'))
+            r.result.createObjectStore('docs', { keyPath: 'id' });
+        };
+        r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+      });
+    },
+    _req(promiseFn) {
+      return this._db().then(db => new Promise((res, rej) => {
+        const tx = db.transaction('docs', 'readwrite');
+        const store = tx.objectStore('docs');
+        const q = promiseFn(store);
+        q.onsuccess = () => res(q.result);
+        q.onerror = () => rej(q.error);
+        tx.onerror = () => rej(tx.error);
+      }));
+    },
+    async add(doc) {
+      doc.id = doc.id || uid('doc');
+      doc.parkedAt = doc.parkedAt || new Date().toISOString();
+      await this._req(s => s.put(doc));
+      return doc;
+    },
+    async all() {
+      const rows = await this._db().then(db => new Promise((res, rej) => {
+        const q = db.transaction('docs', 'readonly').objectStore('docs').getAll();
+        q.onsuccess = () => res(q.result || []); q.onerror = () => rej(q.error);
+      }));
+      return rows.sort((a, b) => (b.parkedAt || '').localeCompare(a.parkedAt || ''));
+    },
+    async get(id) {
+      return this._db().then(db => new Promise((res, rej) => {
+        const q = db.transaction('docs', 'readonly').objectStore('docs').get(id);
+        q.onsuccess = () => res(q.result || null); q.onerror = () => rej(q.error);
+      }));
+    },
+    async setLink(id, jobId, quoteId) {
+      const d = await this.get(id); if (!d) return;
+      d.jobId = jobId || null; d.quoteId = quoteId || null;
+      await this._req(s => s.put(d));
+    },
+    async remove(id) {
+      await this._db().then(db => new Promise((res, rej) => {
+        const tx = db.transaction('docs', 'readwrite');
+        tx.objectStore('docs').delete(id);
+        tx.oncomplete = res; tx.onerror = () => rej(tx.error);
+      }));
+    }
+  };
+
+  return { init, isDemoMode, Outbox, Drafts, Docs, get store() { return _store; } };
 })();

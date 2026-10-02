@@ -1,4 +1,4 @@
-/* Rondor Excavations field app — UI. Works against DemoStore or LiveStore. */
+/* Rondor Excavations field app — UI. Works against LocalStore or LiveStore. */
 (() => {
 'use strict';
 const C = window.RONDOR_DATA, Calc = window.RondorCalc, RS = window.RondorStore;
@@ -11,7 +11,6 @@ const online = () => navigator.onLine !== false;
 
 /* ---------------- shell ---------------- */
 function shell(inner, active) {
-  const demo = Store.mode === 'demo';
   const nav = Me ? bottomNav(active, Me.role) : '';
   document.body.className = Me ? 'hasnav' : '';
   $('#app').innerHTML = `
@@ -21,7 +20,6 @@ function shell(inner, active) {
       <div class="btag">NOT THE BIGGEST, BUT AMONG THE BEST</div></div>
       <div class="badge30">OVER 30 YEARS</div>
     </div>
-    ${demo ? '<div class="offlinebar" style="background:#92600a">DEMO MODE — data stays in this browser</div>' : ''}
     ${!online() ? '<div class="offlinebar">OFFLINE — changes will sync when reconnected</div>' : ''}
     ${OutboxCount ? `<div class="offlinebar">${OutboxCount} photo(s) waiting to upload <button class="btn sm gold" onclick="App.syncNow()">Sync now</button></div>` : ''}
     <div class="wrap">${inner}</div>${nav}`;
@@ -37,7 +35,7 @@ function shell(inner, active) {
 function bottomNav(active, role) {
   const items = role === 'owner'
     ? [['#/','🏠','Home'], ['#/estimate','🧮','Estimate'], ['#/quotes','📄','Quotes'],
-       ['#/jobs','🚧','Jobs'], ['#/customers','👥','Clients'], ['#/more','⋯','More']]
+       ['#/jobs','🚧','Jobs'], ['#/docs','📁','Docs'], ['#/customers','👥','Clients'], ['#/more','⋯','More']]
     : [['#/','🏠','Jobs'], ['#/account','👤','Account']];
   return '<nav class="nav">' + items.map(([h, ic, t]) =>
     `<a href="${h}" class="${active === h ? 'on' : ''}"><span class="ic">${ic}</span>${t}</a>`).join('') + '</nav>';
@@ -60,13 +58,14 @@ async function navigate() {
   try {
     if (parts[0] === 'login') return vLogin();
     if (!Me) return vLogin();
-    const ownerOnly = ['estimate', 'quotes', 'quote', 'customers', 'customer', 'jobs', 'job', 'prices', 'admin', 'qb', 'more'];
+    const ownerOnly = ['estimate', 'quotes', 'quote', 'customers', 'customer', 'jobs', 'job', 'docs', 'doc', 'extract', 'ai', 'prices', 'admin', 'qb', 'more'];
     if (Me.role === 'worker' && ownerOnly.includes(parts[0])) return vWorkerHome();
     const r = parts.join('/');
     if (routes[r]) return routes[r](query);
     // parametric
     if (parts[0] === 'quote' && parts[1]) return vQuoteDetail(parts[1]);
     if (parts[0] === 'customer' && parts[1]) return vCustomerDetail(parts[1]);
+    if (parts[0] === 'doc' && parts[1]) return vDocDetail(parts[1]);
     if (parts[0] === 'job' && parts[1] && Me.role === 'owner') return vJobDetail(parts[1]);
     if (parts[0] === 'wjob' && parts[1]) return vWorkerJob(parts[1]);
     if (parts[0] === 'estimate' && parts[1]) return vEstimate(parts[1]);
@@ -85,21 +84,17 @@ async function refreshOutbox() {
 
 /* ---------------- auth ---------------- */
 async function vLogin() {
-  const demo = Store.mode === 'demo';
   shell(`
     <div class="card" style="max-width:420px;margin:40px auto">
       <h2>Rondor Field App</h2>
-      <p class="muted">${demo ? 'Demo mode — no setup needed.' : 'Sign in with your company account.'}</p>
+      <p class="muted">Sign in to continue.</p>
       <div id="lerr"></div>
-      <label class="f">${demo ? 'Username' : 'Email'}</label>
-      <input id="lemail" type="${demo ? 'text' : 'email'}" autocomplete="username"
-             placeholder="${demo ? 'admin' : 'you@company.ca'}">
+      <label class="f">Username</label>
+      <input id="lemail" type="text" autocomplete="username" placeholder="admin">
       <label class="f">Password</label>
-      <input id="lpass" type="password" autocomplete="current-password"
-             placeholder="${demo ? 'admin' : '••••••••'}">
+      <input id="lpass" type="password" autocomplete="current-password" placeholder="admin">
       <button class="btn block" onclick="App.doLogin()">Sign in</button>
-      ${demo ? '<p class="muted small">Demo accounts: <b>admin/admin</b> (owner, full access) · <b>user/user</b> (field worker, jobs only — no financials).</p>'
-             : '<p><button class="linkbtn" onclick="App.forgot()">Forgot password?</button></p><div id="fmsg"></div>'}
+      <p class="muted small">Accounts: <b>admin/admin</b> (owner, full access) · <b>user/user</b> (field worker, jobs only — no financials).</p>
     </div>`, '');
   $('#lpass').addEventListener('keydown', e => { if (e.key === 'Enter') App.doLogin(); });
 }
@@ -310,8 +305,11 @@ function renderEstimate(customers) {
     <div class="card"><h3>Administrative permits <span class="muted">(+10% profit)</span></h3>${apLines}
       <div class="kv"><span>Permits total</span><span class="v">${money(ap.total)}</span></div></div>
 
+    ${aiLinesCard(est)}
+
     <div class="card"><h3>Quote total</h3>
       ${t.jobLines.map(j => `<div class="kv"><span>${esc(j.name)}</span><span class="v">${money(j.total)}</span></div>`).join('')}
+      ${t.aiLines.length ? `<div class="kv"><span>Extracted items (from documents)</span><span class="v">${money(t.aiLinesTotal)}</span></div>` : ''}
       <div class="kv"><span>Administrative permits</span><span class="v">${money(t.adminPermitsTotal)}</span></div>
       ${t.frostApplies ? `<div class="kv"><span>Frost surcharge (25%)</span><span class="v">${money(t.frostAmount)}</span></div>` : ''}
       <div class="kv"><span><b>Grand total (GST not included)</b></span><span class="v" data-grand>${money(t.grandTotal)}</span></div>
@@ -323,6 +321,24 @@ function renderEstimate(customers) {
     </div>
     <div class="totalbar"><span>Total</span><span>${money(t.grandTotal)}</span></div>
   `, '#/estimate');
+}
+
+/* AI-extracted line items live outside the 7 workbook estimators — priced as-is. */
+function aiLinesCard(est) {
+  const lines = est.aiLines || [];
+  if (!lines.length) return '';
+  const rows = lines.map((l, i) => `
+    <div class="line">
+      <div class="lname">${esc(l.description)}${l.unit ? `<span class="un">per ${esc(l.unit)}</span>` : ''}
+        <span class="un">${esc(l.category || 'other')}</span></div>
+      <span class="small" style="min-width:70px;text-align:right">${money(l.unit_price)} × ${esc(String(l.quantity))}</span>
+      <span style="min-width:44px"></span>
+      <div class="ltotal">${money((+l.quantity || 0) * (+l.unit_price || 0))}</div>
+      <button class="btn sm danger" onclick="App.aiLineRemove(${i})" title="Remove">✕</button>
+    </div>`).join('');
+  return `<div class="card"><h3>📄 Extracted items <span class="muted small">(from documents — priced as shown)</span></h3>
+    ${rows}
+    <p class="muted small">To change these, extract the document again from 📁 Docs.</p></div>`;
 }
 
 function trenchHtml(job, js) {
@@ -393,15 +409,20 @@ Object.assign(window.App, {
     RS.Drafts.save(Est.est); vEstimate();
   },
   clearDraft() { RS.Drafts.clear(); Est = null; vEstimate(); },
+  aiLineRemove(i) {
+    (Est.est.aiLines || []).splice(i, 1);
+    RS.Drafts.save(Est.est); vEstimate();
+  },
   async saveQuote() {
     const msg = $('#estmsg');
     try {
       const t = estTotals();
-      if (!t.jobs.length) throw new Error('Include at least one job type first.');
+      if (!t.jobs.length && !t.aiLines.length) throw new Error('Include at least one job type or extract document items first.');
       let customerId = Est.est.customerId;
       if (!customerId && Est.est.customer.name) {
         const c = await Store.saveCustomer({ name: Est.est.customer.name, phone: Est.est.customer.phone,
-          email: Est.est.customer.email, address: Est.est.customer.address, notes: '' });
+          email: Est.est.customer.email, address: Est.est.customer.address,
+          notes: [Est.est.aiJobName, Est.est.aiNotes].filter(Boolean).join(' — ') });
         customerId = c.id; Est.est.customerId = customerId;
       }
       const q = {
@@ -442,7 +463,8 @@ function softRefreshTotals() {
 
 /* frozen customer-facing snapshot (also used for print/PDF) */
 function snapshotHtml(est, t, cust, terms) {
-  const rows = t.jobLines.map(j => `<tr><td>${esc(j.name)}</td><td class="n">${money(j.total)}</td></tr>`).join('');
+  const rows = t.jobLines.map(j => `<tr><td>${esc(j.name)}</td><td class="n">${money(j.total)}</td></tr>`).join('')
+    + (t.aiLines || []).map(l => `<tr><td>Document item: ${esc(l.description)} (${esc(String(l.quantity))} ${esc(l.unit)} @ ${money(l.unitPrice)})</td><td class="n">${money(l.total)}</td></tr>`).join('');
   return `<!doctype html><html><head><meta charset="utf-8"><title>Quote</title>
   <style>body{font-family:Arial,sans-serif;max-width:700px;margin:20px auto;color:#1c2333}
   .h{background:#1B3A8B;color:#fff;padding:18px;border-radius:8px}
@@ -485,6 +507,12 @@ async function vQuoteDetail(id) {
       <div class="kv"><span style="padding-left:12px">Overhead &amp; profit (${Math.round(j.opRate * 100)}%)</span><span class="v">${money(j.op)}</span></div>
       </div></div>`;
   }).join('');
+  const aiDetail = (t.aiLines && t.aiLines.length) ? `
+    <div class="sect"><div class="shead"><span>📄 Extracted items (from documents)</span><span class="st">${money(t.aiLinesTotal)}</span></div>
+      <div class="sbody">${q.estimate.aiJobName ? `<p class="muted small">Job: ${esc(q.estimate.aiJobName)}${q.estimate.aiDocType ? ' · ' + esc(q.estimate.aiDocType.replace('_', ' ')) : ''}${q.estimate.aiNotes ? ' — ' + esc(q.estimate.aiNotes) : ''}</p>` : ''}
+      ${t.aiLines.map(l => `
+        <div class="kv"><span style="padding-left:12px">${esc(l.description)} <span class="muted small">(${esc(String(l.quantity))} ${esc(l.unit)} @ ${money(l.unitPrice)} · ${esc(l.category)})</span></span><span class="v">${money(l.total)}</span></div>`).join('')}
+      </div></div>` : '';
   shell(`
     ${back('#/quotes', 'Quotes')}
     <div class="card">
@@ -492,6 +520,7 @@ async function vQuoteDetail(id) {
       <div class="row space"><h2 style="margin:0">Quote ${esc(q.number)}</h2>${statusPill(q.status)}</div>
       <p class="muted">${esc(cust.name || '')} · ${esc(cust.address || '')} · Work date: ${esc(q.work_date || '')}</p>
       ${jobDetail}
+      ${aiDetail}
       <div class="kv"><span>Administrative permits</span><span class="v">${money(t.adminPermitsTotal)}</span></div>
       ${t.frostApplies ? `<div class="kv"><span>Frost surcharge (25%)</span><span class="v">${money(t.frostAmount)}</span></div>` : ''}
       <div class="kv"><span><b>Grand total (GST not included)</b></span><span class="v" data-grand>${money(t.grandTotal)}</span></div>
@@ -837,7 +866,7 @@ route('prices', async () => {
     </div>`).join('');
   shell(`${back('#/more', 'More')}
     <div class="card"><h2>Price list</h2>
-      <p class="muted">Central rates — every estimate uses these. ${Store.mode === 'demo' ? 'Demo: saved in this browser.' : 'Saved to the shared database.'}</p>
+      <p class="muted">Central rates — every estimate uses these. ${Store.mode === 'local' ? 'Saved in this browser.' : 'Saved to the shared database.'}</p>
       ${rows}
       <button class="btn gold block" onclick="App.savePrices()">Save prices</button>
       <button class="btn ghost sm" onclick="App.resetPrices()">Reset to workbook defaults</button>
@@ -863,13 +892,13 @@ route('admin', async () => {
   const profiles = await Store.listProfiles();
   shell(`${back('#/more', 'More')}
     <div class="card"><h2>Team</h2>
-      <p class="muted">Set roles here. ${Store.mode === 'demo'
-        ? 'Demo accounts are fixed: admin/admin (owner), user/user (worker).'
+      <p class="muted">Set roles here. ${Store.mode === 'local'
+        ? 'Accounts are fixed: admin/admin (owner), user/user (worker).'
         : 'Create new users in Supabase → Authentication → Users (disable public signup there), then set their role here.'}</p>
       ${profiles.map(p => `
         <div class="item"><div class="t"><div class="h">${esc(p.display_name || p.email)}</div>
           <div class="muted small">${esc(p.email || '')}</div></div>
-          <select onchange="App.setRole('${p.id}',this.value)" ${Store.mode === 'demo' ? 'disabled' : ''}>
+          <select onchange="App.setRole('${p.id}',this.value)" ${Store.mode === 'local' ? 'disabled' : ''}>
             ${['worker', 'owner'].map(r => `<option value="${r}" ${p.role === r ? 'selected' : ''}>${r}</option>`).join('')}
           </select></div>`).join('')}
       <div id="amsg"></div></div>`, '#/more');
@@ -898,6 +927,8 @@ Object.assign(window.App, {
       const cust = (q.estimate && q.estimate.customer && q.estimate.customer.name) || '';
       (q.totals.jobLines || []).forEach(j => rows.push([q.number, q.work_date || '', cust, j.name, (+j.total).toFixed(2)]));
       rows.push([q.number, q.work_date || '', cust, 'Administrative permits', (+q.totals.adminPermitsTotal).toFixed(2)]);
+      (q.totals.aiLines || []).forEach(l => rows.push([q.number, q.work_date || '', cust,
+        'Document item (' + l.category + '): ' + l.description, (+l.total).toFixed(2)]));
       if (q.totals.frostApplies) rows.push([q.number, q.work_date || '', cust, 'Frost surcharge (25%)', (+q.totals.frostAmount).toFixed(2)]);
     });
     const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n');
@@ -907,14 +938,283 @@ Object.assign(window.App, {
   }
 });
 
+/* ================= DOCUMENTS (owner) ================= */
+let docUrl = null;       // current preview blob URL (revoked on next render)
+let ExtractCache = null; // {docId, docName, data} — unapplied extraction review state
+
+function fmtSize(b) {
+  b = +b || 0;
+  if (b < 1024) return b + ' B';
+  if (b < 1048576) return Math.round(b / 1024) + ' KB';
+  return (b / 1048576).toFixed(1) + ' MB';
+}
+function docIcon(mime) { return /pdf/i.test(mime || '') ? '📕' : '🖼️'; }
+
+route('docs', vDocs);
+async function vDocs() {
+  const docs = await RS.Docs.all();
+  const jobs = await Store.listJobs();
+  const quotes = await Store.listQuotes();
+  shell(`${back('#/', 'Home')}
+    <div class="card"><h2>📁 Documents</h2>
+      <p class="muted">Park blueprints, supplier quotes, and invoices here. Files stay on this device — park them against a job or quote to keep them organized, and optionally extract them into a draft quote with AI.</p>
+      <div id="docmsg"></div>
+      <label class="f">File (PDF, JPG, PNG — 20 MB max)</label>
+      <input id="dfile" type="file" accept=".pdf,.jpg,.jpeg,.png">
+      <label class="f">Job (optional)</label>
+      <select id="djob"><option value="">— none —</option>
+        ${jobs.map(j => `<option value="${j.id}">${esc(j.name)}</option>`).join('')}</select>
+      <label class="f">Quote (optional)</label>
+      <select id="dquote"><option value="">— none —</option>
+        ${quotes.map(q => `<option value="${q.id}">${esc(q.number)} — ${esc((q.estimate.customer || {}).name || '')}</option>`).join('')}</select>
+      <button class="btn block mt" onclick="App.parkDoc()">Park document</button>
+    </div>
+    <div class="card"><h3>Parked documents (${docs.length})</h3>
+      ${docs.length ? docs.map(d => `
+        <div class="item"><div class="t"><div class="h">${docIcon(d.mime)} ${esc(d.name)}</div>
+          <div class="muted small">${fmtSize(d.size)} · parked ${esc((d.parkedAt || '').slice(0, 10))}${d.jobId ? ' · job' : ''}${d.quoteId ? ' · quote' : ''}</div></div>
+          <button class="btn sm ghost" onclick="location.hash='#/doc/${d.id}'">Open</button>
+        </div>`).join('') : '<p class="muted">Nothing parked yet.</p>'}
+    </div>`, '#/docs');
+}
+
+async function vDocDetail(id) {
+  const d = await RS.Docs.get(id);
+  if (!d) { location.hash = '#/docs'; return; }
+  const jobs = await Store.listJobs();
+  const quotes = await Store.listQuotes();
+  if (docUrl) { URL.revokeObjectURL(docUrl); docUrl = null; }
+  docUrl = URL.createObjectURL(d.blob);
+  const preview = /pdf/i.test(d.mime)
+    ? `<iframe src="${docUrl}" style="width:100%;height:420px;border:1px solid #ccd;border-radius:8px;background:#fff"></iframe>`
+    : `<img src="${docUrl}" style="max-width:100%;border-radius:8px;display:block;margin:0 auto">`;
+  const job = jobs.find(j => j.id === d.jobId);
+  const quote = quotes.find(q => q.id === d.quoteId);
+  shell(`${back('#/docs', 'Docs')}
+    <div class="card"><h2>${docIcon(d.mime)} ${esc(d.name)}</h2>
+      <div id="docmsg"></div>
+      <p class="muted small">${fmtSize(d.size)} · parked ${esc((d.parkedAt || '').slice(0, 10))}${job ? ' · Job: ' + esc(job.name) : ''}${quote ? ' · Quote: ' + esc(quote.number) : ''}</p>
+      ${preview}
+      <div class="row mt">
+        <div><label class="f">Park against job</label>
+          <select id="ldjob"><option value="">— none —</option>
+          ${jobs.map(j => `<option value="${j.id}" ${j.id === d.jobId ? 'selected' : ''}>${esc(j.name)}</option>`).join('')}</select></div>
+        <div><label class="f">Park against quote</label>
+          <select id="ldquote"><option value="">— none —</option>
+          ${quotes.map(q => `<option value="${q.id}" ${q.id === d.quoteId ? 'selected' : ''}>${esc(q.number)}</option>`).join('')}</select></div>
+      </div>
+      <button class="btn sm ghost mt" onclick="App.linkDoc('${d.id}')">Save links</button>
+      <hr>
+      <button class="btn gold block" onclick="App.extractDoc('${d.id}')">🤖 Extract with AI</button>
+      <button class="btn danger block mt" onclick="App.deleteDoc('${d.id}')">Delete document</button>
+    </div>`, '#/docs');
+}
+
+/* ================= AI EXTRACTION SETTINGS (owner) ================= */
+route('ai', () => {
+  const has = RondorAI.hasKey();
+  shell(`${back('#/more', 'More')}
+    <div class="card"><h2>🤖 AI extraction</h2>
+      <p class="muted">Parked documents can be read by AI and turned into draft quote line items — blueprints (quantities from the plan), supplier quotes, invoices.</p>
+      <div id="aimsg"></div>
+      ${has ? '<p class="okmsg">✓ API key is set on this device.</p>' : '<p class="err">No API key set — extraction is disabled until you add one.</p>'}
+      <label class="f">Anthropic API key</label>
+      <input id="aikey" type="password" autocomplete="off" placeholder="sk-ant-…">
+      <button class="btn block" onclick="App.aiSaveKey()">Save key on this device</button>
+      ${has ? '<button class="btn danger block mt" onclick="App.aiClearKey()">Remove key</button>' : ''}
+      <p class="muted small mt">The key is stored only in this browser's localStorage. It never leaves your device except in direct calls to api.anthropic.com when you tap "Extract with AI". Each extraction uses a small amount of your own Anthropic API credit. Get a key at console.anthropic.com → API keys.</p>
+    </div>`, '#/more');
+});
+
+/* ================= EXTRACTION REVIEW (owner) ================= */
+route('extract', vExtractReview);
+async function vExtractReview() {
+  const c = ExtractCache;
+  if (!c) { location.hash = '#/docs'; return; }
+  const drafts = (await Store.listQuotes()).filter(q => q.status === 'draft');
+  shell(`${back('#/docs', 'Docs')}
+    <div class="card"><h2>Review extracted data</h2>
+      <p class="muted">From <b>${esc(c.docName)}</b>. Check every field — nothing is applied until you tap Apply. Leaving this screen discards the extraction (the document stays parked).</p>
+      <div id="exmsg"></div>
+      <label class="f">Job name</label>
+      <input id="xjob" type="text" value="${esc(c.data.job_name)}" placeholder="e.g. 123 Main St — sewer replacement">
+      <div class="row">
+        <div><label class="f">Customer name</label><input id="xcname" type="text" value="${esc(c.data.customer.name)}"></div>
+        <div><label class="f">Phone</label><input id="xcphone" type="text" value="${esc(c.data.customer.phone)}"></div>
+      </div>
+      <div class="row">
+        <div><label class="f">Email</label><input id="xcemail" type="text" value="${esc(c.data.customer.email)}"></div>
+        <div><label class="f">Address</label><input id="xcaddr" type="text" value="${esc(c.data.customer.address)}"></div>
+      </div>
+      <label class="f">Document type</label>
+      <select id="xdoctype">${RondorAI.DOC_TYPES.map(t =>
+        `<option value="${t}" ${t === c.data.document_type ? 'selected' : ''}>${t.replace('_', ' ')}</option>`).join('')}</select>
+      <label class="f">Notes</label>
+      <textarea id="xnotes" rows="3">${esc(c.data.notes)}</textarea>
+      <h3>Line items</h3>
+      <div id="xlines"></div>
+      <button class="btn sm ghost" onclick="App.xAddRow()">+ Add row</button>
+      <h3 class="mt">Apply</h3>
+      <button class="btn gold block" onclick="App.xApply('new')">Apply to new draft quote</button>
+      ${drafts.length ? `<div class="row mt">
+        <div><label class="f">Existing draft</label>
+          <select id="xdraft">${drafts.map(q => `<option value="${q.id}">${esc(q.number)} — ${esc((q.estimate.customer || {}).name || '')}</option>`).join('')}</select></div>
+        <div><label class="f">&nbsp;</label>
+          <button class="btn sm block" onclick="App.xApply('existing')">Apply to draft</button></div>
+      </div>` : '<p class="muted small">No draft quotes to append to — save one first.</p>'}
+      <button class="btn danger block mt" onclick="App.xDiscard()">Discard extraction</button>
+    </div>`, '#/docs');
+  renderXLines();
+}
+function renderXLines() {
+  const host = $('#xlines');
+  if (!host || !ExtractCache) return;
+  host.innerHTML = ExtractCache.data.line_items.map((l, i) => `
+    <div class="card" style="padding:10px;margin:8px 0;background:#f7f9fd">
+      <input id="xd-${i}" type="text" value="${esc(l.description)}" placeholder="Description">
+      <div class="row">
+        <div><label class="f">Qty</label><input id="xq-${i}" type="number" step="any" min="0" value="${esc(String(l.quantity))}"></div>
+        <div><label class="f">Unit</label><input id="xu-${i}" type="text" value="${esc(l.unit)}" placeholder="m / each / hrs"></div>
+      </div>
+      <div class="row">
+        <div><label class="f">Unit price (CA$)</label><input id="xp-${i}" type="number" step="0.01" min="0" value="${esc(String(l.unit_price))}"></div>
+        <div><label class="f">Category</label><select id="xc-${i}">${RondorAI.CATEGORIES.map(t =>
+          `<option value="${t}" ${t === l.category ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
+      </div>
+      <button class="btn sm danger" onclick="App.xDelRow(${i})">Remove</button>
+    </div>`).join('') || '<p class="muted">No line items — add a row or discard.</p>';
+}
+function xReadLines() {
+  const g = id => document.getElementById(id);
+  ExtractCache.data.line_items.forEach((l, i) => {
+    l.description = g('xd-' + i).value;
+    l.quantity = +g('xq-' + i).value || 0;
+    l.unit = g('xu-' + i).value;
+    l.unit_price = +g('xp-' + i).value || 0;
+    l.category = g('xc-' + i).value;
+  });
+}
+
+Object.assign(window.App, {
+  /* ---- documents ---- */
+  async parkDoc() {
+    const msg = $('#docmsg');
+    try {
+      const f = $('#dfile').files[0];
+      if (!f) throw new Error('Choose a file first.');
+      if (!/pdf|jpe?g|png/i.test(f.type) && !/\.(pdf|jpe?g|png)$/i.test(f.name))
+        throw new Error('PDF, JPG or PNG only.');
+      if (f.size > 20 * 1024 * 1024) throw new Error('File is too large (20 MB max).');
+      msg.innerHTML = '<p class="muted">Parking…</p>';
+      await RS.Docs.add({ name: f.name, mime: f.type || 'application/octet-stream', size: f.size,
+        blob: f, jobId: $('#djob').value || null, quoteId: $('#dquote').value || null });
+      vDocs();
+    } catch (e) { msg.innerHTML = `<p class="err">${esc(e.message)}</p>`; }
+  },
+  async deleteDoc(id) {
+    const d = await RS.Docs.get(id);
+    if (!d) { vDocs(); return; }
+    if (!confirm(`Delete "${d.name}" from this device?`)) return;
+    await RS.Docs.remove(id);
+    ExtractCache = null;
+    vDocs();
+  },
+  async linkDoc(id) {
+    await RS.Docs.setLink(id, $('#ldjob').value || null, $('#ldquote').value || null);
+    vDocDetail(id);
+  },
+  /* ---- extraction ---- */
+  async extractDoc(id) {
+    const msg = $('#docmsg');
+    if (!RondorAI.hasKey()) { location.hash = '#/ai'; return; }
+    const d = await RS.Docs.get(id);
+    if (!d) return;
+    try {
+      msg.innerHTML = '<p class="muted">🤖 Reading document — this can take up to a minute…</p>';
+      const data = await RondorAI.extract({ blob: d.blob, fileName: d.name, mime: d.mime });
+      ExtractCache = { docId: id, docName: d.name, data };
+      location.hash = '#/extract';
+    } catch (e) {
+      if (e.code === 'NO_KEY') { location.hash = '#/ai'; return; }
+      msg.innerHTML = `<p class="err">${esc(e.message)}</p>`;
+    }
+  },
+  xAddRow() {
+    xReadLines();
+    ExtractCache.data.line_items.push({ description: '', quantity: 0, unit: '', unit_price: 0, category: 'other' });
+    renderXLines();
+  },
+  xDelRow(i) {
+    xReadLines();
+    ExtractCache.data.line_items.splice(i, 1);
+    renderXLines();
+  },
+  xDiscard() {
+    if (confirm('Discard this extraction? The document stays parked.')) {
+      ExtractCache = null;
+      location.hash = '#/docs';
+    }
+  },
+  async xApply(mode) {
+    const msg = $('#exmsg');
+    try {
+      xReadLines();
+      const c = ExtractCache;
+      const customer = {
+        name: $('#xcname').value.trim(), phone: $('#xcphone').value.trim(),
+        email: $('#xcemail').value.trim(), address: $('#xcaddr').value.trim()
+      };
+      const aiLines = c.data.line_items
+        .filter(l => l.description.trim())
+        .map(l => ({ description: l.description.trim(), quantity: +l.quantity || 0,
+                     unit: l.unit.trim(), unit_price: +l.unit_price || 0,
+                     category: l.category, docId: c.docId }));
+      if (!customer.name) throw new Error('Enter a customer name first.');
+      if (!aiLines.length) throw new Error('There are no line items to apply.');
+      msg.innerHTML = '<p class="muted">Applying…</p>';
+      const aiMeta = { aiJobName: $('#xjob').value.trim(),
+                       aiNotes: $('#xnotes').value.trim(),
+                       aiDocType: $('#xdoctype').value };
+      if (mode === 'new') {
+        Est = { est: Calc.blankEstimate(), quoteId: null, tab: C.jobs[0].id };
+        Est.est.customer = customer;
+        Est.est.customerId = null;
+        Est.est.aiLines = aiLines;
+        Object.assign(Est.est, aiMeta);
+      } else {
+        const qid = $('#xdraft').value;
+        if (!qid) throw new Error('Pick a draft quote first.');
+        const q = await Store.getQuote(qid);
+        Est = { est: JSON.parse(JSON.stringify(q.estimate)), quoteId: q.id, tab: C.jobs[0].id };
+        Est.est.customer = { ...(Est.est.customer || {}), ...customer };
+        Est.est.aiLines = (Est.est.aiLines || []).concat(aiLines);
+        Object.assign(Est.est, aiMeta);
+      }
+      ExtractCache = null;
+      await App.saveQuote();
+    } catch (e) { msg.innerHTML = `<p class="err">${esc(e.message)}</p>`; }
+  },
+  /* ---- AI settings ---- */
+  aiSaveKey() {
+    const v = $('#aikey').value.trim();
+    if (!v) { $('#aimsg').innerHTML = '<p class="err">Paste your Anthropic API key first.</p>'; return; }
+    RondorAI.setKey(v);
+    $('#aimsg').innerHTML = '<p class="okmsg">✓ Key saved on this device.</p>';
+    setTimeout(() => { if (location.hash === '#/ai') routes['ai'](); }, 900);
+  },
+  aiClearKey() { RondorAI.setKey(''); routes['ai'](); }
+});
+
 /* ================= MORE / ACCOUNT ================= */
 route('more', () => {
   shell(`${back('#/', 'Home')}<div class="card"><h2>More</h2>
     <button class="btn ghost block" onclick="location.hash='#/prices'">💲 Price list</button>
     <button class="btn ghost block" onclick="location.hash='#/admin'">👥 Team &amp; roles</button>
+    <button class="btn ghost block" onclick="location.hash='#/docs'">📁 Documents</button>
+    <button class="btn ghost block" onclick="location.hash='#/ai'">🤖 AI extraction</button>
     <button class="btn ghost block" onclick="location.hash='#/qb'">📊 QuickBooks export</button>
     <button class="btn ghost block" onclick="location.hash='#/account'">👤 Account</button>
-    <p class="muted small">Backend: ${Store.mode === 'demo' ? 'DEMO (this browser only)' : 'Supabase live'}</p>
+    <p class="muted small">Backend: ${Store.mode === 'local' ? 'Local (this browser only)' : 'Supabase live'}</p>
   </div>`, '#/more');
 });
 route('account', async () => {
@@ -943,7 +1243,7 @@ async function boot() {
   } catch (e) {
     $('#app').innerHTML = `<div class="card" style="max-width:520px;margin:40px auto">
       <h2>Couldn't start</h2><p>${esc(e.message)}</p>
-      <p class="muted small">Tip: to use the zero-setup demo, set DEMO_MODE: true in config.js.</p></div>`;
+      <p class="muted small">Tip: this install stores data locally in the browser. Set DEMO_MODE: false in config.js and add Supabase keys for the shared backend.</p></div>`;
     return;
   }
   await refreshOutbox();

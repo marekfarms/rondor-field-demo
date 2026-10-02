@@ -1,8 +1,8 @@
 /* Rondor Excavations field app — Supabase config.
  *
- * DEMO MODE (zero setup): leave DEMO_MODE true (or leave the keys as
+ * LOCAL MODE (zero setup): leave DEMO_MODE true (or leave the keys as
  * placeholders) and the app runs entirely in the browser on localStorage,
- * with demo accounts  admin/admin  (owner) and  user/user  (worker).
+ * with accounts  admin/admin  (owner) and  user/user  (worker).
  * Open index.html as-is or deploy the folder to Netlify — no setup needed.
  *
  * GOING LIVE: set DEMO_MODE to false and paste real values from your

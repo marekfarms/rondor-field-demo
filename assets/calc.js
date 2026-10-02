@@ -66,19 +66,28 @@ window.RondorCalc = (() => {
     return { items, subtotal, opRate: D().adminPermits.opRate, op, total: round2(subtotal + op) };
   }
 
-  // est: { jobs: {jobId: jobState}, adminPermits: {lines}, workDate, frostOverride, lane }
+  // est: { jobs: {jobId: jobState}, adminPermits: {lines}, aiLines: [...], workDate, frostOverride, lane }
+  // aiLines: [{description, quantity, unit, unit_price, category}] — freeform lines
+  // extracted from parked documents (see ai-extract.js). Priced as-is, no markup.
   function quoteTotals(est, prices) {
     const lane = est.lane || { width: D().laneClosure.width, rate: D().laneClosure.ratePerSqm };
     const jobs = D().jobs
       .filter(j => est.jobs && est.jobs[j.id] && est.jobs[j.id].included)
       .map(j => jobTotals(j, est.jobs[j.id], prices, lane));
     const admin = adminPermitsTotals(est.adminPermits && est.adminPermits.lines, prices);
-    const baseTotal = round2(admin.total + jobs.reduce((a, j) => a + j.total, 0));
+    const aiLines = (est.aiLines || []).map(l => {
+      const quantity = +l.quantity || 0, unitPrice = round2(+l.unit_price || 0);
+      return { description: String(l.description || ''), quantity, unit: String(l.unit || ''),
+               unitPrice, category: String(l.category || 'other'),
+               total: round2(quantity * unitPrice), docId: l.docId || null };
+    });
+    const aiLinesTotal = round2(aiLines.reduce((a, l) => a + l.total, 0));
+    const baseTotal = round2(admin.total + jobs.reduce((a, j) => a + j.total, 0) + aiLinesTotal);
     const frostApplies = frostDecision(est.workDate, est.frostOverride);
     const frostAmount = frostApplies ? round2(baseTotal * D().frost.rate) : 0;
     const grandTotal = round2(baseTotal + frostAmount);
     return {
-      jobs, admin,
+      jobs, admin, aiLines, aiLinesTotal,
       jobLines: jobs.map(j => ({ name: j.jobName, total: j.total })),
       adminPermitsTotal: admin.total,
       baseTotal, frostApplies, frostAmount, grandTotal

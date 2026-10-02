@@ -16,7 +16,7 @@
 <script src="assets/store.js"></script>
 <script>
 /* Customer magic-link page. No login. Token-gated via SECURITY DEFINER
-   functions (live) or localStorage lookup (demo). Shows the CUSTOMER
+   functions (live) or localStorage lookup (local). Shows the CUSTOMER
    version only: one line per section, no internal detail. */
 (async () => {
   const $ = s => document.querySelector(s);
@@ -41,7 +41,9 @@
       const q = await Store.publicQuote(qt);
       if (!q) return err('Quote link not recognized.');
       const rows = (q.job_lines || []).map(j =>
-        `<tr><td>${esc(j.name)}</td><td class="n">${money(j.total)}</td></tr>`).join('');
+        `<tr><td>${esc(j.name)}</td><td class="n">${money(j.total)}</td></tr>`).join('')
+        + (q.ai_lines || []).map(l =>
+        `<tr><td>Document item: ${esc(l.description)} (${esc(String(l.quantity))} ${esc(l.unit)} @ ${money(l.unitPrice)})</td><td class="n">${money(l.total)}</td></tr>`).join('');
       const already = q.status === 'accepted';
       shell(`<div class="card">
         <h2>Quotation ${esc(q.number)}</h2>

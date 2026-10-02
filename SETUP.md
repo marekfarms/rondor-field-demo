@@ -1,24 +1,38 @@
 # Rondor Excavations — Field App Setup
 
-## Option A — Demo (zero setup, 1 minute)
+## Option A — Local install (zero setup, 1 minute)
 
 > **Open `index.html` as-is, or deploy this folder to Netlify as-is — no setup needed.**
 
-The app runs entirely in the browser (localStorage) with two demo accounts:
+The app runs entirely in the browser (localStorage) with two fixed accounts:
 
 | Username | Password | Role | Sees |
 |---|---|---|---|
-| `admin` | `admin` | Owner | Everything: estimator, quotes, jobs, costing, photos, prices, team |
+| `admin` | `admin` | Owner | Everything: estimator, quotes, jobs, costing, photos, prices, team, documents |
 | `user` | `user` | Field worker | Assigned jobs only — **name + address, zero financials** — plus photo upload |
 
-The demo is pre-seeded with one sample client (Sarah Johnson), two sample
-quotes (`R-2026-0001` draft, `R-2026-0002` sent), one active job assigned to
-the worker account, and one pending change order — so every screen has
-something to show. Try the full loop: log in as `admin`, open the sent quote,
-copy the customer accept link, open it in another tab, accept it as the
-customer, then log in as `user` and upload a photo to the job.
+A fresh install starts **empty** — no sample customers, quotes, or jobs.
+(Storage key `rondor_app_v2`; the old demo key `rondor_demo_v1` is ignored.)
 
-To reset the demo, clear the site's localStorage (or use a private window).
+To reset, clear the site's localStorage (or use a private window).
+
+### Optional: AI document extraction
+
+**More → 🤖 AI extraction.** Paste your own Anthropic API key — it is stored
+only in that browser's localStorage and is never sent anywhere except directly
+to `api.anthropic.com` when you tap **Extract with AI**. Each extraction uses
+a small amount of your own Anthropic API credit.
+
+With a key set: **📁 Docs** → park a PDF/JPG/PNG (blueprint, supplier quote,
+invoice, max 20 MB), open it, tap **Extract with AI**, review and correct
+every field on the review screen, then **Apply to new draft quote** (or append
+to an existing draft). Extracted line items appear on the quote as their own
+section — priced as shown, no markup — and flow into the totals, the frozen
+snapshot, the customer accept page, and the QuickBooks CSV. Nothing is applied
+until you tap Apply, and you can re-edit or remove lines afterwards.
+
+To change what the AI pulls out of documents (fields, prompt wording, model),
+edit the clearly-marked tuning zone at the top of `assets/ai-extract.js`.
 
 ---
 
@@ -89,8 +103,12 @@ You only need to create the project and paste two keys.
 - **Customers** never log in. They get an unguessable link (`accept.html?t=…`)
   that shows only the customer version of the quote (one line per section,
   T&Cs, total) and lets them accept with a typed name + timestamp.
-- **Owners** see everything. Password recovery is Supabase's built-in
-  reset-email flow (Login → *Forgot password?*).
+- **Owners** see everything. (Local mode: password reset is unavailable —
+  accounts are fixed; Supabase mode uses the built-in reset-email flow.)
+- **Documents** are owner-only: parked files live in the device's IndexedDB
+  and are never uploaded to any server. The Anthropic API key is owner-only,
+  stored in localStorage, and attached only to direct calls to
+  `api.anthropic.com` during extraction.
 - Every photo is **date-stamped and GPS-stamped**: the app burns
   `YYYY-MM-DD HH:MM · lat, lng` visibly onto the image *and* stores the
   timestamp + coordinates in the database. Uploads are blocked until the
@@ -108,6 +126,10 @@ You only need to create the project and paste two keys.
   IndexedDB when offline and upload automatically on reconnect (or via
   **Sync now**). The app shell itself loads from Netlify's CDN cache after
   the first visit.
+- **Documents:** owner-only page for parking PDFs/JPGs/PNGs against jobs or
+  quotes (IndexedDB — files stay on the device). Optional AI extraction via
+  the owner's own Anthropic API key (browser-direct call, review screen
+  before anything is applied, extracted lines priced as-is with no markup).
 - **Estimating logic** replicates the 2026 workbook exactly: 8% material
   markup (services unmarked), per-job O&P (copper/WWS/LDS 12%, watermain 15%,
   abandonments 10%, catchbasins 10%, manholes 15%, admin permits 10%),
@@ -125,9 +147,11 @@ netlify.toml          deploy + security headers
 assets/logo.png       Rondor logo
 assets/style.css      mobile-first styles
 assets/data.js        generated from the 2026 workbook: 72 prices, 7 job types, 13 T&Cs
-assets/calc.js        pure estimating math (mirrors the workbook)
-assets/store.js       data layer: DemoStore (localStorage) + LiveStore (Supabase)
+assets/calc.js        pure estimating math (mirrors the workbook) + extracted-line totals
+assets/store.js       data layer: LocalStore (localStorage) + LiveStore (Supabase); Docs in IndexedDB
+assets/ai-extract.js  AI document extraction (Anthropic, browser-direct; prompt/schema tuning zone)
 assets/app.js         the whole UI
 supabase/schema.sql   tables, RLS, storage, token functions (validated: 57 statements)
+smoke-test.js         node smoke test: clean seed, AI math, Docs wrapper, extraction module (run: node smoke-test.js)
 SETUP.md              this file
 ```
