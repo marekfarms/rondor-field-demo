@@ -257,6 +257,80 @@ const AI = sandbox.window.RondorAI;
      fs.readFileSync(path.join(DIR, 'index.html'), 'utf8').includes('assets/ai-extract.js'),
      'ai-extract.js loaded in index.html');
 
+  console.log('6. Quote wizard (pure logic)');
+  load('assets/wizard.js');
+  const WZ = sandbox.window.RondorWizard;
+  ok(!!WZ && typeof WZ.buildSteps === 'function', 'RondorWizard module loads');
+  const CFG = sandbox.window.RONDOR_CONFIG;
+  ok(CFG.AI_ENABLED === false, 'AI extraction parked: AI_ENABLED=false');
+  ok((appSrc.match(/AI_ON \?/g) || []).length >= 2, 'AI menu/doc buttons gated on AI_ON', (appSrc.match(/AI_ON \?/g) || []).length);
+  ok(/!AI_ON && \(parts\[0\] === 'ai' \|\| parts\[0\] === 'extract'\)/.test(appSrc), 'ai/extract routes redirect to docs when parked');
+  ok(appSrc.includes("route('wizard', () => vWizard(null))"), 'wizard route registered');
+  // step order: no jobs selected
+  let est = Calc.blankEstimate();
+  let steps = WZ.buildSteps(est);
+  ok(steps.map(s => s.id).join(',') === 'customer,basics,worktypes,extras,review,done',
+    'no jobs → customer,basics,worktypes,extras,review,done', steps.map(s => s.id).join(','));
+  // step order: two jobs
+  est = Calc.blankEstimate();
+  WZ.ensureJobState(est, 'copper'); WZ.ensureJobState(est, 'wws150');
+  steps = WZ.buildSteps(est);
+  const sig = steps.map(s => s.id + (s.job ? ':' + s.job : '') + (s.sec ? ':' + s.sec : '')).join(',');
+  ok(sig === 'customer,basics,worktypes,labour:copper,section:copper:permits,section:copper:subtrades,section:copper:materials,labour:wws150,section:wws150:permits,section:wws150:subtrades,section:wws150:materials,addmore:wws150,extras,review,done',
+    'two-job wizard step order', sig);
+  // step index helpers
+  ok(WZ.stepIndexFor(steps, 'wws150', 'materials') === steps.findIndex(s => s.id === 'section' && s.job === 'wws150' && s.sec === 'materials'),
+    'stepIndexFor finds job section');
+  ok(WZ.labourStepIndex(steps, 'copper') === steps.findIndex(s => s.id === 'labour' && s.job === 'copper'),
+    'labourStepIndex finds job labour');
+  // two-job totals through wizard helpers match Calc to the cent
+  const prices6 = await Store.getPrices();
+  est = Calc.blankEstimate();
+  est.customer.name = 'Smoke Test'; est.jobName = 'Smoke Job';
+  WZ.ensureJobState(est, 'copper');
+  WZ.setLineQty(est, 'copper', 'perm_closeday', 3);
+  WZ.setLineQty(est, 'copper', 'sand', 6);
+  WZ.setLinePrice(est, 'copper', 'hydrovac', 950); // editablePrice sub-trade
+  est.jobs.copper.labourQty = 2;
+  WZ.ensureJobState(est, 'wws150');
+  WZ.setLineQty(est, 'wws150', 'pipe1', 120);
+  est.jobs.wws150.labourQty = 1;
+  est.adminPermits.lines = { cutpermit: { qty: 1 } };
+  const lane6 = est.lane;
+  const tCopper = Calc.jobTotals(WZ.jobDef('copper'), est.jobs.copper, prices6, lane6);
+  const tWws = Calc.jobTotals(WZ.jobDef('wws150'), est.jobs.wws150, prices6, lane6);
+  const tAP = Calc.adminPermitsTotals(est.adminPermits.lines, prices6);
+  const t6 = Calc.quoteTotals(est, prices6);
+  const expected6 = tCopper.total + tWws.total + tAP.total + t6.frostAmount;
+  ok(Math.abs(t6.grandTotal - expected6) < 0.005, 'two-job wizard totals match to the cent', t6.grandTotal);
+  const rg = WZ.reviewGroups(est, prices6);
+  ok(Math.abs(rg.totals.grandTotal - t6.grandTotal) < 0.005, 'reviewGroups matches quoteTotals', rg.totals.grandTotal);
+  ok(rg.groups.length === 2 && rg.adminLines.length === 1, 'reviewGroups: 2 jobs + 1 permit line');
+  // draft save/resume round-trip
+  RS.Drafts.save({ est, wizStep: 5, quoteId: null });
+  const d = RS.Drafts.load();
+  ok(d && d.wizStep === 5 && d.est.jobName === 'Smoke Job' && d.est.jobs.copper.included, 'draft resumes with step index + answers');
+  RS.Drafts.clear();
+  ok(RS.Drafts.load() === null, 'draft clears');
+  // validation
+  const e3 = Calc.blankEstimate();
+  ok(WZ.validateStep({ id: 'customer' }, e3) !== '', 'customer step blocks empty name');
+  e3.customer.name = 'X';
+  ok(WZ.validateStep({ id: 'customer' }, e3) === '', 'customer step passes with name');
+  ok(WZ.validateStep({ id: 'basics' }, e3) !== '', 'basics step blocks empty job name');
+  e3.jobName = 'J';
+  ok(WZ.validateStep({ id: 'basics' }, e3) === '', 'basics passes with job name');
+  ok(WZ.validateStep({ id: 'worktypes' }, e3) !== '', 'worktypes blocks no selection');
+  WZ.ensureJobState(e3, 'copper');
+  ok(WZ.validateStep({ id: 'worktypes' }, e3) === '', 'worktypes passes with selection');
+  // question wording
+  ok(WZ.lineQuestion({ key: 'perm_closeday', label: 'Permit — lane closure', unit: 'day' }).q === 'Lane closure — how many days?',
+    'lane closure gets its special question');
+  ok(WZ.lineQuestion({ key: 'sand', label: 'Sand (fill)', unit: 'loads' }).q === 'Sand (fill) — how many loads?',
+    'generic line gets how-many question');
+  ok(WZ.lineQuestion({ key: 'hydrovac', label: 'Hydro vac', editablePrice: true }).q === 'Hydro vac — what did they quote you?',
+    'editable-price line asks for the quote');
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })().catch(e => { console.error('FATAL', e); process.exit(1); });

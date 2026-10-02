@@ -8,6 +8,10 @@ const $ = s => document.querySelector(s);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 const money = Calc.money;
 const online = () => navigator.onLine !== false;
+/* AI document extraction is parked behind the AI_ENABLED flag in config.js.
+   When false the AI nav item, "Extract with AI" buttons, and AI settings are
+   hidden; ai-extract.js stays loaded so flipping the flag re-enables it. */
+const AI_ON = !!(window.RONDOR_CONFIG && window.RONDOR_CONFIG.AI_ENABLED);
 
 /* ---------------- shell ---------------- */
 function shell(inner, active) {
@@ -34,8 +38,8 @@ function shell(inner, active) {
 
 function bottomNav(active, role) {
   const items = role === 'owner'
-    ? [['#/','🏠','Home'], ['#/estimate','🧮','Estimate'], ['#/quotes','📄','Quotes'],
-       ['#/jobs','🚧','Jobs'], ['#/docs','📁','Docs'], ['#/customers','👥','Clients'], ['#/more','⋯','More']]
+    ? [['#/','🏠','Home'], ['#/wizard','📝','New Quote'], ['#/quotes','📄','Quotes'],
+       ['#/jobs','🚧','Jobs'], ['#/docs','📁','Docs'], ['#/more','⋯','More']]
     : [['#/','🏠','Jobs'], ['#/account','👤','Account']];
   return '<nav class="nav">' + items.map(([h, ic, t]) =>
     `<a href="${h}" class="${active === h ? 'on' : ''}"><span class="ic">${ic}</span>${t}</a>`).join('') + '</nav>';
@@ -58,8 +62,10 @@ async function navigate() {
   try {
     if (parts[0] === 'login') return await vLogin();
     if (!Me) return await vLogin();
-    const ownerOnly = ['estimate', 'quotes', 'quote', 'customers', 'customer', 'jobs', 'job', 'docs', 'doc', 'extract', 'ai', 'prices', 'admin', 'qb', 'more'];
+    const ownerOnly = ['wizard', 'quotes', 'quote', 'customers', 'customer', 'jobs', 'job', 'docs', 'doc', 'extract', 'ai', 'prices', 'admin', 'qb', 'more'];
     if (Me.role === 'worker' && ownerOnly.includes(parts[0])) return await vWorkerHome();
+    // AI extraction is parked — its routes redirect to Docs.
+    if (!AI_ON && (parts[0] === 'ai' || parts[0] === 'extract')) { location.hash = '#/docs'; return await vDocs(); }
     const r = parts.join('/');
     // NB: every dispatch is awaited so async errors land in this try/catch
     // instead of becoming unhandled promise rejections that leave the screen frozen.
@@ -70,7 +76,7 @@ async function navigate() {
     if (parts[0] === 'doc' && parts[1]) return await vDocDetail(parts[1]);
     if (parts[0] === 'job' && parts[1] && Me.role === 'owner') return await vJobDetail(parts[1]);
     if (parts[0] === 'wjob' && parts[1]) return await vWorkerJob(parts[1]);
-    if (parts[0] === 'estimate' && parts[1]) return await vEstimate(parts[1]);
+    if (parts[0] === 'wizard') return await vWizard(parts[1] || null);
     return await vHome();
   } catch (e) {
     shell(errBox('Error: ' + e.message) + back('#/', 'Home'), '#/');
@@ -122,14 +128,21 @@ async function vHome() {
   if (Me.role === 'worker') return vWorkerHome();
   const [quotes, jobs, customers] = await Promise.all([Store.listQuotes(), Store.listJobs(), Store.listCustomers()]);
   const open = quotes.filter(q => ['draft', 'sent'].includes(q.status)).length;
+  const draft = RS.Drafts.load();
+  const resumeBanner = (draft && draft.est && (draft.est.jobName || (draft.est.customer && draft.est.customer.name)))
+    ? `<div class="card" style="border-left:4px solid var(--gold)">
+         <b>Unfinished quote</b><p class="muted small">${esc(draft.est.jobName || 'Untitled')} — ${esc((draft.est.customer || {}).name || '')}</p>
+         <div class="row"><button class="btn gold sm" onclick="location.hash='#/wizard'">Resume</button>
+         <button class="btn ghost sm" onclick="App.discardDraft()">Discard</button></div></div>` : '';
   shell(`
+    ${resumeBanner}
     <div class="card"><h2>Good day, ${esc(Me.display_name || 'boss')}.</h2>
       <div class="row">
         <div class="card" style="flex:1;min-width:120px;text-align:center"><div style="font-size:1.6rem;font-weight:800">${quotes.length}</div><div class="muted">Quotes</div></div>
         <div class="card" style="flex:1;min-width:120px;text-align:center"><div style="font-size:1.6rem;font-weight:800">${open}</div><div class="muted">Open</div></div>
         <div class="card" style="flex:1;min-width:120px;text-align:center"><div style="font-size:1.6rem;font-weight:800">${jobs.filter(j=>j.status==='active').length}</div><div class="muted">Active jobs</div></div>
       </div>
-      <button class="btn gold block" onclick="location.hash='#/estimate'">🧮 New estimate</button>
+      <button class="btn gold block" onclick="location.hash='#/wizard'">📝 New quote</button>
       <div class="row">
         <button class="btn ghost sm" onclick="location.hash='#/quotes'">Quotes</button>
         <button class="btn ghost sm" onclick="location.hash='#/jobs'">Jobs</button>
@@ -181,290 +194,48 @@ window.App = { doLogin, forgot, syncNow: async () => {
   navigate();
 } };
 
-/* ================= ESTIMATOR ================= */
-let Est = null; // {est, quoteId, tab}
-route('estimate', () => vEstimate());
+/* ================= QUOTE SAVE (shared by the wizard and parked AI apply) ================= */
+/* The old estimator dashboard was replaced by the guided quote wizard (#/wizard).
+   Its math lives on in calc.js, which the wizard drives. Est + App.saveQuote are
+   kept because the parked AI-extract "apply" flow (xApply) uses them; flip
+   AI_ENABLED in config.js to re-enable. */
+let Est = null;
 
-async function vEstimate(quoteId) {
-  const customers = await Store.listCustomers();
-  if (!Est || (quoteId && Est.quoteId !== quoteId)) {
-    if (quoteId && quoteId !== 'new') {
-      const q = await Store.getQuote(quoteId);
-      Est = { est: JSON.parse(JSON.stringify(q.estimate)), quoteId, tab: C.jobs[0].id };
-    } else {
-      const draft = RS.Drafts.load();
-      Est = { est: draft || Calc.blankEstimate(), quoteId: null, tab: C.jobs[0].id };
-    }
+/* Validate + persist an estimate as a quote. Returns the saved quote. */
+async function persistQuote(est, quoteId) {
+  const t = Calc.quoteTotals(est, Prices);
+  if (!t.jobs.length && !t.aiLines.length) throw new Error('Add at least one type of work first.');
+  let customerId = est.customerId;
+  if (!customerId && est.customer.name) {
+    const c = await Store.saveCustomer({ name: est.customer.name, phone: est.customer.phone,
+      email: est.customer.email, address: est.customer.address,
+      notes: [est.aiJobName, est.aiNotes].filter(Boolean).join(' \u2014 ') });
+    customerId = c.id; est.customerId = customerId;
   }
-  renderEstimate(customers);
-}
-
-function estTotals() { return Calc.quoteTotals(Est.est, Prices); }
-
-function renderEstimate(customers) {
-  const est = Est.est, t = estTotals();
-  const job = C.jobs.find(j => j.id === Est.tab);
-  // A blank estimate has no job type included, so quoteTotals() returns an
-  // empty jobs array — default the totals so the page still renders.
-  const jt = t.jobs.find(j => j.jobId === job.id) ||
-    { sections: [], labourTotal: 0, subtotal: 0, op: 0, total: 0 };
-  const js = est.jobs[job.id];
-
-  const tabs = C.jobs.map(j => {
-    const on = j.id === Est.tab;
-    const inc = est.jobs[j.id].included;
-    return `<button class="jobtab ${on ? 'on' : ''}" onclick="App.estTab('${j.id}')">${inc ? '● ' : ''}${esc(j.name)}</button>`;
-  }).join('');
-
-  const sections = job.sections.map(sec => {
-    const st = jt.sections.find(s => s.id === sec.id) || { lines: [], total: 0 };
-    const lines = sec.lines.map(l => {
-      const ls = (js.lines[l.key] || {});
-      const qty = ls.qty || 0;
-      const stl = st.lines.find(x => x.key === l.key) || { unitPrice: 0, total: 0 };
-      const priceInput = l.editablePrice
-        ? `<input class="price" type="number" step="0.01" min="0" value="${ls.price ?? ''}" placeholder="${stl.unitPrice.toFixed(2)}" oninput="App.estPrice('${job.id}','${l.key}',this.value)">`
-        : `<span class="small" style="min-width:70px;text-align:right">${money(stl.unitPrice)}</span>`;
-      const laneNote = l.priceKey === 'LANE_DAY'
-        ? `<div class="flag" style="margin:4px 0">Per-day = ${esc(String(est.lane.width))}m × $${esc(String(est.lane.rate))}/m² (workbook cell M11). <b>RATE BASIS TO BE CONFIRMED.</b></div>` : '';
-      return `<div class="line ${qty ? '' : 'zero'}">
-        <div class="lname">${esc(l.label)}${l.unit ? `<span class="un">per ${esc(l.unit)}</span>` : ''}${l.note ? `<span class="un">${esc(l.note)}</span>` : ''}${laneNote}</div>
-        ${priceInput}
-        <input class="qty" type="number" step="any" min="0" value="${qty || ''}" placeholder="0" oninput="App.estQty('${job.id}','${l.key}',this.value)">
-        <div class="ltotal" data-lt="${job.id}:${l.key}">${money(stl.total)}</div>
-      </div>`;
-    }).join('');
-    return `<div class="sect"><div class="shead" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'':'none'">
-      <span>${esc(sec.name)}</span><span class="st" data-st="${job.id}:${sec.id}">${money(st.total)}</span></div>
-      <div class="sbody">${lines}</div></div>`;
-  }).join('');
-
-  const perUnit = job.perUnit && js.numUnits
-    ? `<div class="flag">Per-${esc(job.perUnit)} cost: <b>${money(jt.total / js.numUnits)}</b> (${esc(String(js.numUnits))} ${esc(job.perUnit)}s)</div>` : '';
-  const perUnitInput = job.perUnit
-    ? `<label class="f">Number of ${esc(job.perUnit)}s (for per-unit cost)</label>
-       <input type="number" min="0" step="1" style="max-width:140px" value="${js.numUnits || ''}" placeholder="0" oninput="App.estNumUnits('${job.id}',this.value)">` : '';
-
-  const trench = trenchHtml(job, js);
-
-  const ap = t.admin;
-  const apLines = C.adminPermits.lines.map(l => {
-    const qty = +(((est.adminPermits.lines || {})[l.key] || {}).qty) || 0;
-    const up = Calc.priceOf(l.priceKey, Prices);
-    return `<div class="line ${qty ? '' : 'zero'}">
-      <div class="lname">${esc(l.label)}</div>
-      <span class="small" style="min-width:70px;text-align:right">${money(up)}</span>
-      <input class="qty" type="number" step="any" min="0" value="${qty || ''}" placeholder="0" oninput="App.estAP('${l.key}',this.value)">
-      <div class="ltotal">${money(qty * up)}</div></div>`;
-  }).join('');
-
-  const cust = est.customer || {};
-  shell(`
-    ${back('#/', 'Home')}
-    <div class="card"><h2>${Est.quoteId ? 'Edit estimate' : 'New estimate'}</h2>
-      <label class="f">Customer</label>
-      <select onchange="App.estCustomer(this.value)">
-        <option value="">— type new below —</option>
-        ${customers.map(c => `<option value="${c.id}" ${est.customerId === c.id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}
-      </select>
-      <div class="row">
-        <div style="flex:1;min-width:140px"><label class="f">Name</label><input id="ec_name" type="text" value="${esc(cust.name || '')}" oninput="App.estCustField('name',this.value)"></div>
-        <div style="flex:1;min-width:140px"><label class="f">Phone</label><input type="tel" value="${esc(cust.phone || '')}" oninput="App.estCustField('phone',this.value)"></div>
-      </div>
-      <div class="row">
-        <div style="flex:1;min-width:140px"><label class="f">Email</label><input type="email" value="${esc(cust.email || '')}" oninput="App.estCustField('email',this.value)"></div>
-        <div style="flex:1;min-width:140px"><label class="f">Address</label><input type="text" value="${esc(cust.address || '')}" oninput="App.estCustField('address',this.value)"></div>
-      </div>
-      <div class="row">
-        <div><label class="f">Work date</label><input type="date" value="${esc(est.workDate || '')}" onchange="App.estDate(this.value)"></div>
-        <div><label class="f">Frost surcharge (25%, Dec 1–Mar 31)</label>
-          <select onchange="App.estFrost(this.value)">
-            <option value="auto" ${est.frostOverride == null ? 'selected' : ''}>Auto (${t.frostApplies ? 'applies' : 'no'})</option>
-            <option value="yes" ${est.frostOverride === true ? 'selected' : ''}>Force on</option>
-            <option value="no" ${est.frostOverride === false ? 'selected' : ''}>Force off</option>
-          </select></div>
-      </div>
-      <div class="row">
-        <div><label class="f">Lane closure width (m)</label><input type="number" step="0.1" style="max-width:110px" value="${esc(String(est.lane.width))}" oninput="App.estLane('width',this.value)"></div>
-        <div><label class="f">Rate ($/m²)</label><input type="number" step="0.01" style="max-width:110px" value="${esc(String(est.lane.rate))}" oninput="App.estLane('rate',this.value)"></div>
-      </div>
-      <div class="flag">Lane-closure per-day = width × rate — <b>rate basis to be confirmed</b>.</div>
-    </div>
-
-    <div class="card">
-      <label class="row" style="font-weight:700"><input type="checkbox" ${js.included ? 'checked' : ''} onchange="App.estInclude('${job.id}',this.checked)" style="width:22px;height:22px"> Include ${esc(job.name)} on this quote</label>
-      <div class="jobtabs">${tabs}</div>
-      ${js.included ? `
-        ${perUnitInput}${perUnit}
-        <label class="f">Labour &amp; equipment — qty × ${money(job.labourRate)}</label>
-        <input class="qty" type="number" step="any" min="0" value="${js.labourQty || ''}" placeholder="0" oninput="App.estLabour('${job.id}',this.value)">
-        <div class="kv"><span>Labour total</span><span class="v" data-labour="${job.id}">${money(jt.labourTotal)}</span></div>
-        <div class="mt">${sections}</div>
-        <div class="kv"><span>Subtotal</span><span class="v" data-sub="${job.id}">${money(jt.subtotal)}</span></div>
-        <div class="kv"><span>Overhead &amp; profit (${Math.round(job.opRate * 100)}%)</span><span class="v" data-op="${job.id}">${money(jt.op)}</span></div>
-        <div class="kv"><span><b>${esc(job.name)} total</b></span><span class="v" data-jt="${job.id}">${money(jt.total)}</span></div>
-        <div class="mt">${trench}
-      ` : `<p class="muted">Tick the box above to add ${esc(job.name)} to this quote.</p>`}
-    </div>
-
-    <div class="card"><h3>Administrative permits <span class="muted">(+10% profit)</span></h3>${apLines}
-      <div class="kv"><span>Permits total</span><span class="v">${money(ap.total)}</span></div></div>
-
-    ${aiLinesCard(est)}
-
-    <div class="card"><h3>Quote total</h3>
-      ${t.jobLines.map(j => `<div class="kv"><span>${esc(j.name)}</span><span class="v">${money(j.total)}</span></div>`).join('')}
-      ${t.aiLines.length ? `<div class="kv"><span>Extracted items (from documents)</span><span class="v">${money(t.aiLinesTotal)}</span></div>` : ''}
-      <div class="kv"><span>Administrative permits</span><span class="v">${money(t.adminPermitsTotal)}</span></div>
-      ${t.frostApplies ? `<div class="kv"><span>Frost surcharge (25%)</span><span class="v">${money(t.frostAmount)}</span></div>` : ''}
-      <div class="kv"><span><b>Grand total (GST not included)</b></span><span class="v" data-grand>${money(t.grandTotal)}</span></div>
-      <div class="mt row">
-        <button class="btn gold" onclick="App.saveQuote()">💾 Save quote</button>
-        <button class="btn ghost sm" onclick="App.clearDraft()">Clear draft</button>
-      </div>
-      <div id="estmsg"></div>
-    </div>
-    <div class="totalbar"><span>Total</span><span>${money(t.grandTotal)}</span></div>
-  `, '#/estimate');
-}
-
-/* AI-extracted line items live outside the 7 workbook estimators — priced as-is. */
-function aiLinesCard(est) {
-  const lines = est.aiLines || [];
-  if (!lines.length) return '';
-  const rows = lines.map((l, i) => `
-    <div class="line">
-      <div class="lname">${esc(l.description)}${l.unit ? `<span class="un">per ${esc(l.unit)}</span>` : ''}
-        <span class="un">${esc(l.category || 'other')}</span></div>
-      <span class="small" style="min-width:70px;text-align:right">${money(l.unit_price)} × ${esc(String(l.quantity))}</span>
-      <span style="min-width:44px"></span>
-      <div class="ltotal">${money((+l.quantity || 0) * (+l.unit_price || 0))}</div>
-      <button class="btn sm danger" onclick="App.aiLineRemove(${i})" title="Remove">✕</button>
-    </div>`).join('');
-  return `<div class="card"><h3>📄 Extracted items <span class="muted small">(from documents — priced as shown)</span></h3>
-    ${rows}
-    <p class="muted small">To change these, extract the document again from 📁 Docs.</p></div>`;
-}
-
-function trenchHtml(job, js) {
-  const tr = js.trench || {};
-  const g = (k, dflt) => (tr[k] !== undefined && tr[k] !== '' ? tr[k] : dflt);
-  const mud = Calc.mudHaul(+g('mudW', 1) || 0, +g('mudL', 25) || 0, +g('mudH', 3) || 0);
-  const pv = Calc.pipeVolume(+g('pipeR', 0.075) || 0, +g('pipeL', 25) || 0);
-  const sand = Calc.fillLoads(+g('sandW', 1) || 0, +g('sandL', 25) || 0, +g('sandH', 3) || 0, pv);
-  const stone = Calc.fillLoads(+g('stoneW', 1) || 0, +g('stoneL', 28) || 0, +g('stoneH', 1.75) || 0, pv);
-  const inp = (k, v, label) => `<div><label class="f">${label}</label>
-    <input type="number" step="any" style="max-width:96px" value="${esc(String(v))}" oninput="App.estTrench('${job.id}','${k}',this.value)"></div>`;
-  return `<div class="sect"><div class="shead" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'':'none'">
-    <span>🚧 Trench calculator</span><span class="st">tap to ${tr._open ? 'hide' : 'open'}</span></div>
-    <div class="sbody" style="display:${tr._open ? '' : 'none'}">
-      <p class="muted small">Mud swell 20%. Sand/stone: tonnes = m³ × 1.61, loads = tonnes ÷ 12. Pipe volume is subtracted from fill.</p>
-      <h4>Mud haul</h4><div class="row">${inp('mudW', g('mudW', 1), 'Width (m)')}${inp('mudL', g('mudL', 25), 'Length (m)')}${inp('mudH', g('mudH', 3), 'Height (m)')}</div>
-      <div class="kv"><span>Volume (w/ swell)</span><span class="v">${mud.cuM} m³</span></div>
-      <div class="kv"><span>Tandem loads (÷7)</span><span class="v">${mud.loads}</span></div>
-      <h4>Pipe volume</h4><div class="row">${inp('pipeR', g('pipeR', 0.075), 'Radius (m)')}${inp('pipeL', g('pipeL', 25), 'Length (m)')}</div>
-      <div class="kv"><span>Pipe volume</span><span class="v">${pv} m³</span></div>
-      <h4>Sand fill</h4><div class="row">${inp('sandW', g('sandW', 1), 'Width')}${inp('sandL', g('sandL', 25), 'Length')}${inp('sandH', g('sandH', 3), 'Height')}</div>
-      <div class="kv"><span>Sand loads</span><span class="v">${sand.loads} (${sand.tonnes} t)</span></div>
-      <button class="btn sm ghost" onclick="App.trenchToQty('${job.id}','sand',${sand.loads})">Use ${sand.loads} → SAND qty</button>
-      <h4>Stone fill</h4><div class="row">${inp('stoneW', g('stoneW', 1), 'Width')}${inp('stoneL', g('stoneL', 28), 'Length')}${inp('stoneH', g('stoneH', 1.75), 'Height')}</div>
-      <div class="kv"><span>Stone loads</span><span class="v">${stone.loads} (${stone.tonnes} t)</span></div>
-      <button class="btn sm ghost" onclick="App.trenchToQty('${job.id}','pitrun',${stone.loads})">Use ${stone.loads} → PIT RUN qty</button>
-    </div></div>`;
+  const q = {
+    id: quoteId || undefined,
+    customer_id: customerId || null,
+    work_date: est.workDate || null,
+    frost_applies: t.frostApplies,
+    estimate: JSON.parse(JSON.stringify(est)),
+    totals: t,
+    terms: C.terms.slice(),
+    snapshot_html: snapshotHtml(est, t, est.customer, C.terms.slice())
+  };
+  return Store.saveQuote(q);
 }
 
 Object.assign(window.App, {
-  estTab(id) { Est.tab = id; RS.Drafts.save(Est.est); vEstimate(); },
-  estInclude(id, on) {
-    Est.est.jobs[id].included = on; RS.Drafts.save(Est.est); renderEstimate([]);
-    // re-render needs customers; cheap: reload
-    vEstimate();
-  },
-  estQty(jobId, key, v) {
-    const L = Est.est.jobs[jobId].lines[key] || (Est.est.jobs[jobId].lines[key] = {});
-    L.qty = parseFloat(v) || 0; RS.Drafts.save(Est.est); softRefreshTotals();
-  },
-  estPrice(jobId, key, v) {
-    const L = Est.est.jobs[jobId].lines[key] || (Est.est.jobs[jobId].lines[key] = {});
-    L.price = v === '' ? undefined : parseFloat(v); RS.Drafts.save(Est.est); softRefreshTotals();
-  },
-  estLabour(jobId, v) { Est.est.jobs[jobId].labourQty = parseFloat(v) || 0; RS.Drafts.save(Est.est); softRefreshTotals(); },
-  estNumUnits(jobId, v) { Est.est.jobs[jobId].numUnits = parseFloat(v) || 0; RS.Drafts.save(Est.est); vEstimate(); },
-  estAP(key, v) {
-    const L = Est.est.adminPermits.lines[key] || (Est.est.adminPermits.lines[key] = {});
-    L.qty = parseFloat(v) || 0; RS.Drafts.save(Est.est); softRefreshTotals();
-  },
-  estTrench(jobId, k, v) {
-    const tr = Est.est.jobs[jobId].trench || (Est.est.jobs[jobId].trench = {});
-    tr[k] = v; tr._open = true; RS.Drafts.save(Est.est);
-  },
-  trenchToQty(jobId, lineKey, loads) {
-    const L = Est.est.jobs[jobId].lines[lineKey] || (Est.est.jobs[jobId].lines[lineKey] = {});
-    L.qty = (parseFloat(L.qty) || 0) + loads; RS.Drafts.save(Est.est); vEstimate();
-  },
-  estDate(v) { Est.est.workDate = v; Est.est.frostOverride = null; RS.Drafts.save(Est.est); vEstimate(); },
-  estFrost(v) { Est.est.frostOverride = v === 'auto' ? null : v === 'yes'; RS.Drafts.save(Est.est); vEstimate(); },
-  estLane(k, v) { Est.est.lane[k] = parseFloat(v) || 0; RS.Drafts.save(Est.est); softRefreshTotals(); },
-  estCustField(k, v) { Est.est.customer[k] = v; Est.est.customerId = null; RS.Drafts.save(Est.est); },
-  async estCustomer(id) {
-    if (!id) return;
-    const c = await Store.getCustomer(id);
-    Est.est.customerId = id;
-    Est.est.customer = { name: c.name, phone: c.phone || '', email: c.email || '', address: c.address || '' };
-    RS.Drafts.save(Est.est); vEstimate();
-  },
-  clearDraft() { RS.Drafts.clear(); Est = null; vEstimate(); },
-  aiLineRemove(i) {
-    (Est.est.aiLines || []).splice(i, 1);
-    RS.Drafts.save(Est.est); vEstimate();
-  },
   async saveQuote() {
     const msg = $('#estmsg');
     try {
-      const t = estTotals();
-      if (!t.jobs.length && !t.aiLines.length) throw new Error('Include at least one job type or extract document items first.');
-      let customerId = Est.est.customerId;
-      if (!customerId && Est.est.customer.name) {
-        const c = await Store.saveCustomer({ name: Est.est.customer.name, phone: Est.est.customer.phone,
-          email: Est.est.customer.email, address: Est.est.customer.address,
-          notes: [Est.est.aiJobName, Est.est.aiNotes].filter(Boolean).join(' — ') });
-        customerId = c.id; Est.est.customerId = customerId;
-      }
-      const q = {
-        id: Est.quoteId || undefined,
-        customer_id: customerId || null,
-        work_date: Est.est.workDate || null,
-        frost_applies: t.frostApplies,
-        estimate: JSON.parse(JSON.stringify(Est.est)),
-        totals: t,
-        terms: C.terms.slice(),
-        snapshot_html: snapshotHtml(Est.est, t, Est.est.customer, C.terms.slice())
-      };
-      const saved = await Store.saveQuote(q);
+      const saved = await persistQuote(Est.est, Est.quoteId);
       Est.quoteId = saved.id; RS.Drafts.clear();
       msg.innerHTML = okBox(`Saved as quote ${esc(saved.number)}.`);
       setTimeout(() => { location.hash = '#/quote/' + saved.id; }, 900);
     } catch (e) { msg.innerHTML = errBox(e.message); }
   }
 });
-
-// update all totals without full re-render (keeps input focus)
-function softRefreshTotals() {
-  const t = estTotals();
-  const set = (sel, v) => document.querySelectorAll(sel).forEach(el => { el.textContent = v; });
-  set('.totalbar span:last-child', money(t.grandTotal));
-  set('[data-grand]', money(t.grandTotal));
-  t.jobs.forEach(j => {
-    j.sections.forEach(sec => {
-      set(`[data-st="${j.jobId}:${sec.id}"]`, money(sec.total));
-      sec.lines.forEach(l => set(`[data-lt="${j.jobId}:${l.key}"]`, money(l.total)));
-    });
-    set(`[data-labour="${j.jobId}"]`, money(j.labourTotal));
-    set(`[data-sub="${j.jobId}"]`, money(j.subtotal));
-    set(`[data-op="${j.jobId}"]`, money(j.op));
-    set(`[data-jt="${j.jobId}"]`, money(j.total));
-  });
-}
 
 /* frozen customer-facing snapshot (also used for print/PDF) */
 function snapshotHtml(est, t, cust, terms) {
@@ -480,6 +251,7 @@ function snapshotHtml(est, t, cust, terms) {
   <div>956 Redonda St, Sunnyside MB, R5R 0J7 · 204.791.4905</div></div>
   <h3>Quotation</h3>
   <p><b>${esc(cust.name || '')}</b><br>${esc(cust.address || '')}<br>${esc(cust.phone || '')} ${esc(cust.email || '')}</p>
+  ${est.jobName ? `<p><b>Job:</b> ${esc(est.jobName)}${est.siteAddress ? '<br>' + esc(est.siteAddress) : ''}</p>` : ''}
   <p>Work date: ${esc(est.workDate || '')}</p>
   <table><tr><th>Scope of work</th><th class="n">Amount</th></tr>${rows}
   <tr><td>Administrative permits</td><td class="n">${money(t.adminPermitsTotal)}</td></tr>
@@ -494,7 +266,7 @@ function snapshotHtml(est, t, cust, terms) {
 route('quotes', async () => {
   const quotes = await Store.listQuotes();
   shell(`${back('#/', 'Home')}<div class="card"><h2>Quotes</h2>
-    <button class="btn gold sm" onclick="location.hash='#/estimate'">🧮 New estimate</button>
+    <button class="btn gold sm" onclick="location.hash='#/wizard'">📝 New quote</button>
     <div class="mt">${quoteListHtml(quotes)}</div></div>`, '#/quotes');
 });
 
@@ -567,7 +339,7 @@ Object.assign(window.App, {
       customer_id: q.customer_id, quote_id: q.id, status: 'active', assigned_worker_ids: [] });
     location.hash = '#/job/' + job.id;
   },
-  editQuote(id) { Est = null; location.hash = '#/estimate/' + id; },
+  editQuote(id) { location.hash = '#/wizard/' + id; },
   async deleteQuote(id) {
     if (!confirm('Delete this quote?')) return;
     await Store.deleteQuote(id); location.hash = '#/quotes';
@@ -962,7 +734,7 @@ async function vDocs() {
   const quotes = await Store.listQuotes();
   shell(`${back('#/', 'Home')}
     <div class="card"><h2>📁 Documents</h2>
-      <p class="muted">Park blueprints, supplier quotes, and invoices here. Files stay on this device — park them against a job or quote to keep them organized, and optionally extract them into a draft quote with AI.</p>
+      <p class="muted">Park blueprints, supplier quotes, and invoices here. Files stay on this device — park them against a job or quote to keep them organized.</p>
       <div id="docmsg"></div>
       <label class="f">File (PDF, JPG, PNG — 20 MB max)</label>
       <input id="dfile" type="file" accept=".pdf,.jpg,.jpeg,.png">
@@ -1009,8 +781,7 @@ async function vDocDetail(id) {
           ${quotes.map(q => `<option value="${q.id}" ${q.id === d.quoteId ? 'selected' : ''}>${esc(q.number)}</option>`).join('')}</select></div>
       </div>
       <button class="btn sm ghost mt" onclick="App.linkDoc('${d.id}')">Save links</button>
-      <hr>
-      <button class="btn gold block" onclick="App.extractDoc('${d.id}')">🤖 Extract with AI</button>
+      ${AI_ON ? `<hr><button class="btn gold block" onclick="App.extractDoc('${d.id}')">🤖 Extract with AI</button>` : ''}
       <button class="btn danger block mt" onclick="App.deleteDoc('${d.id}')">Delete document</button>
     </div>`, '#/docs');
 }
@@ -1247,7 +1018,8 @@ route('more', () => {
     <button class="btn ghost block" onclick="location.hash='#/prices'">💲 Price list</button>
     <button class="btn ghost block" onclick="location.hash='#/admin'">👥 Team &amp; roles</button>
     <button class="btn ghost block" onclick="location.hash='#/docs'">📁 Documents</button>
-    <button class="btn ghost block" onclick="location.hash='#/ai'">🤖 AI extraction</button>
+    <button class="btn ghost block" onclick="location.hash='#/customers'">👥 Clients</button>
+    ${AI_ON ? `<button class="btn ghost block" onclick="location.hash='#/ai'">🤖 AI extraction</button>` : ''}
     <button class="btn ghost block" onclick="location.hash='#/qb'">📊 QuickBooks export</button>
     <button class="btn ghost block" onclick="location.hash='#/account'">👤 Account</button>
     <p class="muted small">Backend: ${Store.mode === 'local' ? 'Local (this browser only)' : 'Supabase live'}</p>
@@ -1272,6 +1044,413 @@ Object.assign(window.App, {
   async logout() { await Store.signOut(); Me = null; location.hash = '#/login'; }
 });
 
+
+/* ================= QUOTE WIZARD — guided interview (replaces estimator dashboard) ================= */
+let Wiz = null; // {est, quoteId, steps, idx}
+const WZ = window.RondorWizard;
+
+function wizSaveDraft() {
+  if (Wiz) RS.Drafts.save({ est: Wiz.est, wizStep: Wiz.idx, quoteId: Wiz.quoteId });
+}
+
+async function vWizard(quoteId) {
+  if (quoteId) {
+    // Editing an existing draft quote: jump straight to the Review step.
+    const q = await Store.getQuote(quoteId);
+    if (!q) { shell(errBox('Quote not found.') + back('#/quotes', 'Quotes'), '#/quotes'); return; }
+    const est = JSON.parse(JSON.stringify(q.estimate));
+    const steps = WZ.buildSteps(est);
+    const ri = steps.findIndex(s => s.id === 'review');
+    Wiz = { est, quoteId: q.id, steps, idx: ri === -1 ? 0 : ri };
+  } else if (!Wiz) {
+    const d = RS.Drafts.load();
+    if (d && d.est) {
+      const steps = WZ.buildSteps(d.est);
+      Wiz = { est: d.est, quoteId: d.quoteId || null, steps,
+              idx: Math.min(d.wizStep || 0, steps.length - 1) };
+    } else {
+      const est = Calc.blankEstimate();
+      Wiz = { est, quoteId: null, steps: WZ.buildSteps(est), idx: 0 };
+    }
+  } else {
+    Wiz.steps = WZ.buildSteps(Wiz.est);
+    if (Wiz.idx >= Wiz.steps.length) Wiz.idx = Wiz.steps.length - 1;
+  }
+  wizRender();
+}
+
+async function wizRender() {
+  const step = Wiz.steps[Wiz.idx];
+  const n = Wiz.idx + 1, m = Wiz.steps.length;
+  const pct = Math.round((n / m) * 100);
+  const inner = await wizStepHtml(step);
+  shell(`
+    <div class="wizprog"><div class="wizbar" style="width:${pct}%"></div></div>
+    <p class="muted small wizstep">Step ${n} of ${m} — ${esc(step.title)}</p>
+    <div class="card">${inner}</div>
+    <div id="wizmsg"></div>
+    <div class="wbtnrow">
+      ${Wiz.idx > 0 ? `<button class="btn ghost" onclick="App.wizBack()">← Back</button>` : `<span></span>`}
+      <button class="btn ghost sm" onclick="App.wizSaveExit()">Save &amp; exit</button>
+      ${step.id !== 'done' ? `<button class="btn gold" onclick="App.wizNext()">Continue →</button>` : `<span></span>`}
+    </div>
+  `, '#/wizard');
+}
+
+async function wizStepHtml(step) {
+  switch (step.id) {
+    case 'customer': return wizCustomerHtml();
+    case 'basics': return wizBasicsHtml();
+    case 'worktypes': return wizWorktypesHtml();
+    case 'labour': return wizLabourHtml(step);
+    case 'section': return wizSectionHtml(step);
+    case 'addmore': return wizAddMoreHtml(step);
+    case 'extras': return wizExtrasHtml();
+    case 'review': return wizReviewHtml();
+    case 'done': return wizDoneHtml();
+  }
+  return '';
+}
+
+/* ---- step 1: customer ---- */
+async function wizCustomerHtml() {
+  const customers = await Store.listCustomers();
+  const c = Wiz.est.customer || {};
+  const hasProgress = (c.name || Wiz.est.jobName ||
+    Object.values(Wiz.est.jobs || {}).some(j => j.included));
+  return `
+    <h2>Who is this quote for?</h2>
+    <p class="muted">Pick an existing client, or type a new one below.</p>
+    ${hasProgress ? `<p class="muted small"><a href="javascript:App.wizFresh()">Start a fresh quote instead</a></p>` : ''}
+    <label class="f">Existing client</label>
+    <select id="w_custpick" class="biginput" onchange="App.wizPickCustomer(this.value)">
+      <option value="">— new customer —</option>
+      ${customers.map(x => `<option value="${x.id}" ${Wiz.est.customerId === x.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}
+    </select>
+    <div class="row">
+      <div style="flex:1;min-width:140px"><label class="f">Name *</label>
+        <input id="w_cname" class="biginput" type="text" value="${esc(c.name || '')}" oninput="App.wizCustField('name', this.value)"></div>
+      <div style="flex:1;min-width:140px"><label class="f">Phone</label>
+        <input id="w_cphone" class="biginput" type="tel" value="${esc(c.phone || '')}" oninput="App.wizCustField('phone', this.value)"></div>
+    </div>
+    <div class="row">
+      <div style="flex:1;min-width:140px"><label class="f">Email</label>
+        <input id="w_cemail" class="biginput" type="email" value="${esc(c.email || '')}" oninput="App.wizCustField('email', this.value)"></div>
+      <div style="flex:1;min-width:140px"><label class="f">Address</label>
+        <input id="w_caddr" class="biginput" type="text" value="${esc(c.address || '')}" oninput="App.wizCustField('address', this.value)"></div>
+    </div>`;
+}
+
+/* ---- step 2: job basics ---- */
+function wizBasicsHtml() {
+  const est = Wiz.est;
+  if (!est.siteAddress && est.customer && est.customer.address) est.siteAddress = est.customer.address;
+  return `
+    <h2>Job details</h2>
+    <label class="f">Job name *</label>
+    <input id="w_jobname" class="biginput" type="text" placeholder="e.g. Smith — sewer replacement"
+      value="${esc(est.jobName || '')}" oninput="App.wizBasic('jobName', this.value)">
+    <label class="f">Site address</label>
+    <input id="w_site" class="biginput" type="text" value="${esc(est.siteAddress || '')}"
+      oninput="App.wizBasic('siteAddress', this.value)">
+    <label class="f">Start date</label>
+    <input id="w_date" class="biginput" type="date" value="${esc(est.workDate || '')}"
+      onchange="App.wizBasic('workDate', this.value)">`;
+}
+
+/* ---- step 3: work types ---- */
+function wizWorktypesHtml() {
+  const est = Wiz.est;
+  const boxes = C.jobs.map(j => `
+    <label class="wcheck"><input type="checkbox" ${est.jobs[j.id] && est.jobs[j.id].included ? 'checked' : ''}
+      onchange="App.wizToggleJob('${j.id}', this.checked)">
+      <span><b>${esc(j.name)}</b><br><span class="muted small">${esc(WZ.JOB_BLURBS[j.id] || '')}</span></span>
+    </label>`).join('');
+  return `<h2>What type of work is it?</h2>
+    <p class="muted">Tick everything this quote covers — you'll price each one next.</p>
+    ${boxes}`;
+}
+
+/* ---- per-job: labour ---- */
+function wizLabourHtml(step) {
+  const j = WZ.jobDef(step.job);
+  const js = WZ.ensureJobState(Wiz.est, step.job);
+  const perUnit = j.perUnit ? `
+    <label class="f">How many ${esc(j.perUnit)}s?</label>
+    <input class="biginput" type="number" min="0" step="1" style="max-width:160px"
+      value="${js.numUnits || ''}" placeholder="0" oninput="App.wizNumUnits('${j.id}', this.value)">` : '';
+  return `<h2>${esc(j.name)} — labour &amp; equipment</h2>
+    <p class="muted">Crew and machine time for this part of the job.</p>
+    ${perUnit}
+    <label class="f">Labour &amp; equipment units <span class="muted">× ${money(j.labourRate)} each</span></label>
+    <input class="biginput" type="number" min="0" step="any" style="max-width:160px"
+      value="${js.labourQty || ''}" placeholder="0" oninput="App.wizLabour('${j.id}', this.value)">`;
+}
+
+/* ---- per-job per-section: estimator questions ---- */
+function wizLineRow(jobId, l, js, est) {
+  const ls = js.lines[l.key] || {};
+  const qty = ls.qty || 0;
+  const qq = WZ.lineQuestion(l);
+  let priceHtml;
+  if (l.editablePrice) {
+    const ph = l.priceKey ? Calc.priceOf(l.priceKey, Prices) : 0;
+    priceHtml = `<div><label class="f" style="margin:0">Price (CA$)</label>
+      <input class="biginput" type="number" min="0" step="0.01" style="max-width:150px"
+        value="${ls.price ?? ''}" placeholder="${ph ? ph.toFixed(2) : '0.00'}"
+        oninput="App.wizLinePrice('${jobId}','${l.key}',this.value)"></div>`;
+  } else {
+    const up = l.priceKey === 'LANE_DAY'
+      ? (parseFloat(est.lane.width) || 0) * (parseFloat(est.lane.rate) || 0)
+      : Calc.priceOf(l.priceKey, Prices);
+    priceHtml = `<div class="wprice">${money(up)}${l.unit ? ` <span class="muted small">per ${esc(l.unit)}</span>` : ''}</div>`;
+  }
+  return `<div class="qrow">
+    <div class="qq"><b>${esc(qq.q)}</b></div>
+    ${qq.hint ? `<div class="muted small">${esc(qq.hint)}</div>` : ''}
+    <div class="row" style="align-items:end">
+      <div><label class="f" style="margin:0">Qty</label>
+        <input class="biginput" type="number" min="0" step="any" style="max-width:150px"
+          value="${qty || ''}" placeholder="0"
+          oninput="App.wizLineQty('${jobId}','${l.key}',this.value)"></div>
+      ${priceHtml}
+    </div></div>`;
+}
+
+function wizTrenchHtml(jobId, js) {
+  const tr = js.trench || {};
+  const w = parseFloat(tr.w) || 1, l = parseFloat(tr.l) || 25, h = parseFloat(tr.h) || 3;
+  const fill = Calc.fillLoads(w, l, h, 0);
+  return `<div class="qrow"><div class="qq"><b>🚧 Trench helper</b> <span class="muted small">(optional)</span></div>
+    <div class="muted small">Not sure how many loads of sand or stone? Enter the trench size.</div>
+    <div class="row">
+      <div><label class="f" style="margin:0">Width (m)</label>
+        <input class="biginput" type="number" step="any" style="max-width:100px" value="${esc(String(tr.w ?? ''))}" placeholder="1" oninput="App.wizTrench('${jobId}','w',this.value)"></div>
+      <div><label class="f" style="margin:0">Length (m)</label>
+        <input class="biginput" type="number" step="any" style="max-width:100px" value="${esc(String(tr.l ?? ''))}" placeholder="25" oninput="App.wizTrench('${jobId}','l',this.value)"></div>
+      <div><label class="f" style="margin:0">Depth (m)</label>
+        <input class="biginput" type="number" step="any" style="max-width:100px" value="${esc(String(tr.h ?? ''))}" placeholder="3" oninput="App.wizTrench('${jobId}','h',this.value)"></div>
+    </div>
+    <div class="muted small" id="wtrench-out">≈ ${fill.loads} loads of fill (${fill.tonnes} tonnes)</div>
+    <div class="row">
+      <button class="btn sm ghost" onclick="App.wizTrenchUse('${jobId}','sand')">Use for Sand</button>
+      <button class="btn sm ghost" onclick="App.wizTrenchUse('${jobId}','pitrun')">Use for Pit run</button>
+    </div></div>`;
+}
+
+function wizSectionHtml(step) {
+  const j = WZ.jobDef(step.job);
+  const sec = j.sections.find(s => s.id === step.sec);
+  const js = WZ.ensureJobState(Wiz.est, step.job);
+  const rows = sec.lines.map(l => wizLineRow(step.job, l, js, Wiz.est)).join('');
+  const trench = sec.lines.some(l => l.key === 'sand') ? wizTrenchHtml(step.job, js) : '';
+  return `<h2>${esc(j.name)} — ${esc(sec.name.replace(' (8% markup)', ''))}</h2>
+    <p class="muted">${esc(WZ.sectionIntro(sec.name))}</p>
+    ${rows}${trench}`;
+}
+
+/* ---- add-another-work-type loop ---- */
+function wizAddMoreHtml(step) {
+  const j = WZ.jobDef(step.job);
+  const t = Calc.quoteTotals(Wiz.est, Prices);
+  const jt = t.jobs.find(x => x.jobId === step.job);
+  const rest = C.jobs.filter(x => !(Wiz.est.jobs[x.id] && Wiz.est.jobs[x.id].included));
+  return `<h2>${esc(j.name)} — priced${jt ? ' at ' + money(jt.total) : ''}</h2>
+    <p class="muted">Want to add another type of work to this quote?</p>
+    ${rest.map(x => `
+      <label class="wcheck"><input type="checkbox" data-addmore="${x.id}">
+      <span><b>${esc(x.name)}</b><br><span class="muted small">${esc(WZ.JOB_BLURBS[x.id] || '')}</span></span></label>`).join('')
+      || '<p class="muted">All work types are already on this quote.</p>'}
+    <div class="row">
+      ${rest.length ? `<button class="btn gold" onclick="App.wizAddMore()">＋ Add selected</button>` : ''}
+      <button class="btn ghost" onclick="App.wizNext()">No — continue →</button>
+    </div>`;
+}
+
+/* ---- extras: permits, lane closure, frost ---- */
+function wizExtrasHtml() {
+  const est = Wiz.est;
+  const t = Calc.quoteTotals(est, Prices);
+  const apRows = C.adminPermits.lines.map(l => {
+    const qty = +(((est.adminPermits.lines || {})[l.key] || {}).qty) || 0;
+    const up = Calc.priceOf(l.priceKey, Prices);
+    return `<div class="qrow"><div class="qq"><b>${esc(l.label)}</b> <span class="muted small">— how many? (${money(up)} each)</span></div>
+      <input class="biginput" type="number" min="0" step="any" style="max-width:150px"
+        value="${qty || ''}" placeholder="0" oninput="App.wizAP('${l.key}', this.value)"></div>`;
+  }).join('');
+  const frostNote = t.frostApplies
+    ? 'Your start date falls in frost season (Dec 1 – Mar 31), so the 25% frost surcharge applies.'
+    : 'Your start date is outside frost season (Dec 1 – Mar 31), so no frost surcharge.';
+  return `<h2>Permits &amp; extras</h2>
+    <p class="muted">City permits and fees — enter what applies, 0 skips.</p>
+    ${apRows}
+    <div class="qrow"><div class="qq"><b>Lane closure</b></div>
+      <div class="muted small">Closing a lane, boulevard, or sidewalk? Charged per day = width × rate. <b>Rate basis to be confirmed.</b></div>
+      <div class="row">
+        <div><label class="f" style="margin:0">Width (m)</label>
+          <input class="biginput" type="number" step="any" style="max-width:110px" value="${esc(String(est.lane.width))}" oninput="App.wizLane('width', this.value)"></div>
+        <div><label class="f" style="margin:0">Rate ($/m²)</label>
+          <input class="biginput" type="number" step="0.01" style="max-width:110px" value="${esc(String(est.lane.rate))}" oninput="App.wizLane('rate', this.value)"></div>
+      </div></div>
+    <div class="qrow"><div class="qq"><b>Frost surcharge</b></div>
+      <div class="muted small">${esc(frostNote)}</div>
+      <label class="f" style="margin:8px 0 0">Override</label>
+      <select class="biginput" style="max-width:220px" onchange="App.wizFrost(this.value)">
+        <option value="auto" ${est.frostOverride == null ? 'selected' : ''}>Auto</option>
+        <option value="yes" ${est.frostOverride === true ? 'selected' : ''}>Always apply</option>
+        <option value="no" ${est.frostOverride === false ? 'selected' : ''}>Never apply</option>
+      </select></div>`;
+}
+
+/* ---- review ---- */
+function wizReviewHtml() {
+  const { groups, adminLines, totals: t } = WZ.reviewGroups(Wiz.est, Prices);
+  const jobBlocks = groups.map(g => {
+    const secRows = g.sections.map(s => `
+      <div class="muted small" style="margin-top:8px"><b>${esc(s.name.replace(' (8% markup)', ''))}</b></div>
+      ${s.lines.map(l => `
+        <div class="item" onclick="App.wizJump('${g.jobId}','${s.id}')" style="cursor:pointer">
+          <div class="t"><div class="h">${esc(l.label)}</div>
+            <div class="muted small">${esc(String(l.qty))} × ${money(l.unitPrice)}${l.markup > 1 ? ' (incl. markup)' : ''}</div></div>
+          <div class="row"><b>${money(l.total)}</b><span class="muted">✏️</span></div>
+        </div>`).join('')}`).join('');
+    const labourRow = g.labourQty ? `
+      <div class="item" onclick="App.wizJumpLabour('${g.jobId}')" style="cursor:pointer">
+        <div class="t"><div class="h">Labour &amp; equipment</div>
+          <div class="muted small">${esc(String(g.labourQty))} × ${money(g.labourRate)}</div></div>
+        <div class="row"><b>${money(g.labourTotal)}</b><span class="muted">✏️</span></div>
+      </div>` : '';
+    return `<div class="card" style="margin:10px 0"><div class="row space">
+        <h3 style="margin:0">${esc(g.name)}</h3><b>${money(g.total)}</b></div>
+      ${labourRow}${secRows}
+      <div class="kv"><span class="muted small">Overhead &amp; profit (${Math.round(g.opRate * 100)}%)</span><span class="v muted small">${money(g.op)}</span></div>
+    </div>`;
+  }).join('') || '<p class="muted">No work priced yet — go back and add a type of work.</p>';
+  const apBlock = adminLines.length ? `<div class="card" style="margin:10px 0">
+      <div class="row space"><h3 style="margin:0">Permits &amp; fees</h3>
+      <button class="btn sm ghost" onclick="App.wizJumpExtras()">✏️</button></div>
+      ${adminLines.map(l => `<div class="kv"><span>${esc(l.label)} <span class="muted small">(${esc(String(l.qty))} × ${money(l.unitPrice)})</span></span><span class="v">${money(l.total)}</span></div>`).join('')}
+    </div>` : '';
+  const aiBlock = (t.aiLines && t.aiLines.length) ? `<div class="card" style="margin:10px 0">
+      <h3 style="margin:0 0 6px">📄 Document items</h3>
+      ${t.aiLines.map(l => `<div class="kv"><span>${esc(l.description)} <span class="muted small">(${esc(String(l.quantity))} ${esc(l.unit)})</span></span><span class="v">${money(l.total)}</span></div>`).join('')}
+    </div>` : '';
+  return `<h2>Review your quote</h2>
+    <p class="muted">Tap any line to jump back and change it.</p>
+    ${jobBlocks}${apBlock}${aiBlock}
+    <div class="kv"><span><b>Grand total (GST not included)</b></span><span class="v"><b>${money(t.grandTotal)}</b></span></div>
+    ${t.frostApplies ? `<p class="muted small">Includes 25% frost surcharge (${money(t.frostAmount)}).</p>` : ''}`;
+}
+
+/* ---- done ---- */
+function wizDoneHtml() {
+  const t = Calc.quoteTotals(Wiz.est, Prices);
+  return `<h2>Ready to save</h2>
+    <p class="muted">This saves a draft quote you can review, edit, or send from Quotes.</p>
+    <div class="kv"><span>Customer</span><span class="v">${esc((Wiz.est.customer || {}).name || '—')}</span></div>
+    ${Wiz.est.jobName ? `<div class="kv"><span>Job</span><span class="v">${esc(Wiz.est.jobName)}</span></div>` : ''}
+    <div class="kv"><span><b>Grand total</b></span><span class="v"><b>${money(t.grandTotal)}</b></span></div>
+    <button class="btn gold block mt" onclick="App.wizSave()">💾 Save draft quote</button>`;
+}
+
+Object.assign(window.App, {
+  wizCustField(k, v) { Wiz.est.customer[k] = v; Wiz.est.customerId = null; wizSaveDraft(); },
+  async wizPickCustomer(id) {
+    if (!id) return;
+    const c = await Store.getCustomer(id);
+    Wiz.est.customerId = id;
+    Wiz.est.customer = { name: c.name, phone: c.phone || '', email: c.email || '', address: c.address || '' };
+    wizSaveDraft(); wizRender();
+  },
+  wizBasic(k, v) { Wiz.est[k] = v; if (k === 'workDate') Wiz.est.frostOverride = null; wizSaveDraft(); },
+  wizToggleJob(id, on) {
+    if (on) WZ.ensureJobState(Wiz.est, id);
+    else if (Wiz.est.jobs[id]) Wiz.est.jobs[id].included = false;
+    wizSaveDraft();
+  },
+  wizLabour(id, v) { WZ.ensureJobState(Wiz.est, id).labourQty = Math.max(0, parseFloat(v) || 0); wizSaveDraft(); },
+  wizNumUnits(id, v) { WZ.ensureJobState(Wiz.est, id).numUnits = Math.max(0, parseInt(v) || 0); wizSaveDraft(); },
+  wizLineQty(jobId, key, v) { WZ.setLineQty(Wiz.est, jobId, key, v); wizSaveDraft(); },
+  wizLinePrice(jobId, key, v) { WZ.setLinePrice(Wiz.est, jobId, key, v); wizSaveDraft(); },
+  wizTrench(jobId, k, v) {
+    const js = WZ.ensureJobState(Wiz.est, jobId);
+    js.trench = js.trench || {}; js.trench[k] = v; wizSaveDraft();
+    const w = parseFloat(js.trench.w) || 1, l = parseFloat(js.trench.l) || 25, h = parseFloat(js.trench.h) || 3;
+    const fill = Calc.fillLoads(w, l, h, 0);
+    const out = document.getElementById('wtrench-out');
+    if (out) out.textContent = `≈ ${fill.loads} loads of fill (${fill.tonnes} tonnes)`;
+  },
+  wizTrenchUse(jobId, lineKey) {
+    const js = WZ.ensureJobState(Wiz.est, jobId);
+    const tr = js.trench || {};
+    const w = parseFloat(tr.w) || 1, l = parseFloat(tr.l) || 25, h = parseFloat(tr.h) || 3;
+    WZ.setLineQty(Wiz.est, jobId, lineKey, Calc.fillLoads(w, l, h, 0).loads);
+    wizSaveDraft(); wizRender();
+  },
+  wizAP(key, v) {
+    const L = Wiz.est.adminPermits.lines[key] || (Wiz.est.adminPermits.lines[key] = {});
+    L.qty = Math.max(0, parseFloat(v) || 0); wizSaveDraft();
+  },
+  wizLane(k, v) { Wiz.est.lane[k] = Math.max(0, parseFloat(v) || 0); wizSaveDraft(); },
+  wizFrost(v) { Wiz.est.frostOverride = v === 'auto' ? null : v === 'yes'; wizSaveDraft(); wizRender(); },
+  wizAddMore() {
+    const ids = [...document.querySelectorAll('[data-addmore]:checked')].map(el => el.dataset.addmore);
+    ids.forEach(id => WZ.ensureJobState(Wiz.est, id));
+    Wiz.steps = WZ.buildSteps(Wiz.est);
+    const li = Wiz.steps.findIndex(s => s.id === 'labour' && ids.includes(s.job));
+    Wiz.idx = li === -1 ? Wiz.steps.findIndex(s => s.id === 'extras') : li;
+    wizSaveDraft(); wizRender(); window.scrollTo(0, 0);
+  },
+  wizJump(jobId, secId) {
+    const i = WZ.stepIndexFor(Wiz.steps, jobId, secId);
+    if (i !== -1) { Wiz.idx = i; wizSaveDraft(); wizRender(); window.scrollTo(0, 0); }
+  },
+  wizJumpLabour(jobId) {
+    const i = WZ.labourStepIndex(Wiz.steps, jobId);
+    if (i !== -1) { Wiz.idx = i; wizSaveDraft(); wizRender(); window.scrollTo(0, 0); }
+  },
+  wizJumpExtras() {
+    const i = Wiz.steps.findIndex(s => s.id === 'extras');
+    if (i !== -1) { Wiz.idx = i; wizSaveDraft(); wizRender(); window.scrollTo(0, 0); }
+  },
+  wizBack() {
+    Wiz.idx = Math.max(0, Wiz.idx - 1);
+    wizSaveDraft(); wizRender(); window.scrollTo(0, 0);
+  },
+  wizNext() {
+    const step = Wiz.steps[Wiz.idx];
+    const err = WZ.validateStep(step, Wiz.est);
+    const msg = $('#wizmsg');
+    if (err) { if (msg) msg.innerHTML = errBox(err); window.scrollTo(0, 0); return; }
+    if (step.id === 'worktypes') {
+      Wiz.steps = WZ.buildSteps(Wiz.est);
+      const li = Wiz.steps.findIndex(s => s.id === 'labour');
+      Wiz.idx = li === -1 ? Wiz.steps.findIndex(s => s.id === 'extras') : li;
+    } else if (step.id === 'review') {
+      Wiz.idx = Wiz.steps.findIndex(s => s.id === 'done');
+    } else {
+      Wiz.idx = Math.min(Wiz.idx + 1, Wiz.steps.length - 1);
+    }
+    wizSaveDraft(); wizRender(); window.scrollTo(0, 0);
+  },
+  wizSaveExit() { wizSaveDraft(); Wiz = null; location.hash = '#/quotes'; },
+  wizFresh() {
+    if (confirm('Start over with a blank quote? The current answers will be discarded.')) {
+      Wiz = null; RS.Drafts.clear(); vWizard(null);
+    }
+  },
+  discardDraft() { if (confirm('Discard the unfinished quote?')) { RS.Drafts.clear(); navigate(); } },
+  async wizSave() {
+    const msg = $('#wizmsg');
+    try {
+      msg.innerHTML = '<p class="muted">Saving…</p>';
+      const saved = await persistQuote(Wiz.est, Wiz.quoteId);
+      Wiz = null; RS.Drafts.clear();
+      location.hash = '#/quote/' + saved.id;
+    } catch (e) { msg.innerHTML = errBox(e.message); }
+  }
+});
+route('wizard', () => vWizard(null));
 /* ---------------- boot ---------------- */
 async function boot() {
   try {

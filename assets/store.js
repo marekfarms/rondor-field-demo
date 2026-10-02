@@ -544,8 +544,9 @@ window.RondorStore = (() => {
 
   /* ---- estimator draft autosave (localStorage) ---- */
   const Drafts = {
-    save(est) { try { localStorage.setItem(DRAFT_KEY, JSON.stringify({ est, at: Date.now() })); } catch (e) {} },
-    load() { try { const d = JSON.parse(localStorage.getItem(DRAFT_KEY)); return d && d.est; } catch (e) { return null; } },
+    // Wizard in-progress state: { est, wizStep, quoteId }
+    save(d) { try { localStorage.setItem(DRAFT_KEY, JSON.stringify({ d, at: Date.now() })); } catch (e) {} },
+    load() { try { const d = JSON.parse(localStorage.getItem(DRAFT_KEY)); return d && d.d; } catch (e) { return null; } },
     clear() { localStorage.removeItem(DRAFT_KEY); }
   };
 

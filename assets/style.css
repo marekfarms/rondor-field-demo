@@ -148,3 +148,16 @@ body.hasnav .totalbar { bottom: 58px; }
 @media (min-width: 700px) {
   .photogrid { grid-template-columns: repeat(4, 1fr); }
 }
+
+/* ---- quote wizard (guided interview) ---- */
+.wizprog { height: 8px; background: #e5e7eb; border-radius: 4px; overflow: hidden; margin: 4px 0; }
+.wizbar { height: 100%; background: var(--gold); border-radius: 4px; transition: width .25s; }
+.wizstep { margin: 6px 0 0; }
+input.biginput, select.biginput { font-size: 1.1rem; padding: 12px; min-height: 52px; margin: 4px 0 12px; }
+.qrow { border: 1px solid #e5e7eb; border-radius: 10px; padding: 12px; margin: 10px 0; background: #fff; }
+.qq { font-size: 1.02rem; margin-bottom: 2px; }
+.wcheck { display: flex; gap: 12px; align-items: flex-start; border: 1px solid #e5e7eb; border-radius: 10px; padding: 14px; margin: 10px 0; cursor: pointer; background: #fff; }
+.wcheck input { width: 28px; height: 28px; margin-top: 2px; flex-shrink: 0; }
+.wbtnrow { display: flex; gap: 10px; margin: 14px 0 30px; }
+.wbtnrow .btn { flex: 1; min-height: 54px; font-size: 1.05rem; }
+.wprice { font-weight: 700; white-space: nowrap; font-size: 1.05rem; }

@@ -5,12 +5,17 @@
  * with accounts  admin/admin  (owner) and  user/user  (worker).
  * Open index.html as-is or deploy the folder to Netlify — no setup needed.
  *
+ * AI document extraction is PARKED: AI_ENABLED is false, so the AI nav item,
+ * "Extract with AI" buttons, and AI settings are hidden. The extraction code
+ * (assets/ai-extract.js) stays intact — flip AI_ENABLED to true to re-enable.
+ *
  * GOING LIVE: set DEMO_MODE to false and paste real values from your
  * Supabase project (see SETUP.md). The schema and all backend wiring are
  * already in place; the same UI switches to the live database.
  */
 window.RONDOR_CONFIG = {
   DEMO_MODE: true,
+  AI_ENABLED: false,
   SUPABASE_URL: "https://YOUR-PROJECT.supabase.co",
   SUPABASE_ANON_KEY: "YOUR-ANON-PUBLIC-KEY"
 };

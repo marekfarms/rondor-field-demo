@@ -16,9 +16,25 @@ A fresh install starts **empty** — no sample customers, quotes, or jobs.
 
 To reset, clear the site's localStorage (or use a private window).
 
-### Optional: AI document extraction
+### Quoting flow — guided interview
 
-**More → 🤖 AI extraction.** Pick a provider — **Anthropic**, **OpenAI**,
+**📝 New quote** walks the owner through a TurboTax-style interview: customer →
+job details → work types → per-job labour & questions → add-more loop →
+permits & extras → review (tap any line to jump back) → save draft. The same
+estimator math from the workbook (8% material markup, per-job O&P, 25% frost
+surcharge) powers every screen. Drafts autosave — an unfinished quote shows a
+**Resume** banner on the home screen. The old estimator dashboard was replaced
+by this wizard; its math lives on untouched in `assets/calc.js`.
+
+### Optional: AI document extraction (currently parked)
+
+> **Parked for now.** All AI extraction UI is hidden behind a feature flag:
+> set `AI_ENABLED: true` in `assets/config.js` to bring it back. The extraction
+> code (`assets/ai-extract.js`) and the review/apply flow are unchanged and
+> ready when wanted.
+
+When enabled: **More → 🤖 AI extraction.** Pick a provider — **Anthropic**,
+**OpenAI**,
 **NVIDIA NIM**, or **Ollama (local)** — then paste that provider's API key
 (Ollama needs no key). Keys are stored only in that browser's localStorage,
 one per provider, and are only ever sent to the active provider's host when
@@ -133,10 +149,12 @@ You only need to create the project and paste two keys.
   **Sync now**). The app shell itself loads from Netlify's CDN cache after
   the first visit.
 - **Documents:** owner-only page for parking PDFs/JPGs/PNGs against jobs or
-  quotes (IndexedDB — files stay on the device). Optional AI extraction via
-  the owner's own API key for Anthropic, OpenAI, NVIDIA NIM, or local Ollama
-  (browser-direct call, review screen before anything is applied, extracted
-  lines priced as-is with no markup).
+  quotes (IndexedDB — files stay on the device). AI document extraction via
+  the owner's own API key (Anthropic, OpenAI, NVIDIA NIM, or local Ollama)
+  is implemented but **parked behind the `AI_ENABLED` flag** in
+  `assets/config.js` — set it to `true` to re-enable (browser-direct call,
+  review screen before anything is applied, extracted lines priced as-is
+  with no markup).
 - **Estimating logic** replicates the 2026 workbook exactly: 8% material
   markup (services unmarked), per-job O&P (copper/WWS/LDS 12%, watermain 15%,
   abandonments 10%, catchbasins 10%, manholes 15%, admin permits 10%),
