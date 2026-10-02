@@ -56,20 +56,22 @@ async function navigate() {
   const parts = path.split('/').filter(Boolean);
   window.scrollTo(0, 0);
   try {
-    if (parts[0] === 'login') return vLogin();
-    if (!Me) return vLogin();
+    if (parts[0] === 'login') return await vLogin();
+    if (!Me) return await vLogin();
     const ownerOnly = ['estimate', 'quotes', 'quote', 'customers', 'customer', 'jobs', 'job', 'docs', 'doc', 'extract', 'ai', 'prices', 'admin', 'qb', 'more'];
-    if (Me.role === 'worker' && ownerOnly.includes(parts[0])) return vWorkerHome();
+    if (Me.role === 'worker' && ownerOnly.includes(parts[0])) return await vWorkerHome();
     const r = parts.join('/');
-    if (routes[r]) return routes[r](query);
+    // NB: every dispatch is awaited so async errors land in this try/catch
+    // instead of becoming unhandled promise rejections that leave the screen frozen.
+    if (routes[r]) return await routes[r](query);
     // parametric
-    if (parts[0] === 'quote' && parts[1]) return vQuoteDetail(parts[1]);
-    if (parts[0] === 'customer' && parts[1]) return vCustomerDetail(parts[1]);
-    if (parts[0] === 'doc' && parts[1]) return vDocDetail(parts[1]);
-    if (parts[0] === 'job' && parts[1] && Me.role === 'owner') return vJobDetail(parts[1]);
-    if (parts[0] === 'wjob' && parts[1]) return vWorkerJob(parts[1]);
-    if (parts[0] === 'estimate' && parts[1]) return vEstimate(parts[1]);
-    return vHome();
+    if (parts[0] === 'quote' && parts[1]) return await vQuoteDetail(parts[1]);
+    if (parts[0] === 'customer' && parts[1]) return await vCustomerDetail(parts[1]);
+    if (parts[0] === 'doc' && parts[1]) return await vDocDetail(parts[1]);
+    if (parts[0] === 'job' && parts[1] && Me.role === 'owner') return await vJobDetail(parts[1]);
+    if (parts[0] === 'wjob' && parts[1]) return await vWorkerJob(parts[1]);
+    if (parts[0] === 'estimate' && parts[1]) return await vEstimate(parts[1]);
+    return await vHome();
   } catch (e) {
     shell(errBox('Error: ' + e.message) + back('#/', 'Home'), '#/');
   }
@@ -90,9 +92,9 @@ async function vLogin() {
       <p class="muted">Sign in to continue.</p>
       <div id="lerr"></div>
       <label class="f">Username</label>
-      <input id="lemail" type="text" autocomplete="username" placeholder="admin">
+      <input id="lemail" type="text" autocomplete="username" placeholder="admin" value="admin">
       <label class="f">Password</label>
-      <input id="lpass" type="password" autocomplete="current-password" placeholder="admin">
+      <input id="lpass" type="password" autocomplete="current-password" placeholder="admin" value="admin">
       <button class="btn block" onclick="App.doLogin()">Sign in</button>
       <p class="muted small">Accounts: <b>admin/admin</b> (owner, full access) · <b>user/user</b> (field worker, jobs only — no financials).</p>
     </div>`, '');
@@ -202,7 +204,10 @@ function estTotals() { return Calc.quoteTotals(Est.est, Prices); }
 function renderEstimate(customers) {
   const est = Est.est, t = estTotals();
   const job = C.jobs.find(j => j.id === Est.tab);
-  const jt = t.jobs.find(j => j.jobId === job.id);
+  // A blank estimate has no job type included, so quoteTotals() returns an
+  // empty jobs array — default the totals so the page still renders.
+  const jt = t.jobs.find(j => j.jobId === job.id) ||
+    { sections: [], labourTotal: 0, subtotal: 0, op: 0, total: 0 };
   const js = est.jobs[job.id];
 
   const tabs = C.jobs.map(j => {
@@ -212,11 +217,11 @@ function renderEstimate(customers) {
   }).join('');
 
   const sections = job.sections.map(sec => {
-    const st = jt.sections.find(s => s.id === sec.id);
+    const st = jt.sections.find(s => s.id === sec.id) || { lines: [], total: 0 };
     const lines = sec.lines.map(l => {
       const ls = (js.lines[l.key] || {});
       const qty = ls.qty || 0;
-      const stl = st.lines.find(x => x.key === l.key);
+      const stl = st.lines.find(x => x.key === l.key) || { unitPrice: 0, total: 0 };
       const priceInput = l.editablePrice
         ? `<input class="price" type="number" step="0.01" min="0" value="${ls.price ?? ''}" placeholder="${stl.unitPrice.toFixed(2)}" oninput="App.estPrice('${job.id}','${l.key}',this.value)">`
         : `<span class="small" style="min-width:70px;text-align:right">${money(stl.unitPrice)}</span>`;
@@ -298,7 +303,7 @@ function renderEstimate(customers) {
         <div class="kv"><span>Subtotal</span><span class="v" data-sub="${job.id}">${money(jt.subtotal)}</span></div>
         <div class="kv"><span>Overhead &amp; profit (${Math.round(job.opRate * 100)}%)</span><span class="v" data-op="${job.id}">${money(jt.op)}</span></div>
         <div class="kv"><span><b>${esc(job.name)} total</b></span><span class="v" data-jt="${job.id}">${money(jt.total)}</span></div>
-        <div class="mt">${trench}}
+        <div class="mt">${trench}
       ` : `<p class="muted">Tick the box above to add ${esc(job.name)} to this quote.</p>`}
     </div>
 
@@ -1012,17 +1017,35 @@ async function vDocDetail(id) {
 
 /* ================= AI EXTRACTION SETTINGS (owner) ================= */
 route('ai', () => {
+  const prov = RondorAI.getProvider();
+  const cfg = RondorAI.PROVIDERS[prov];
   const has = RondorAI.hasKey();
   shell(`${back('#/more', 'More')}
     <div class="card"><h2>🤖 AI extraction</h2>
       <p class="muted">Parked documents can be read by AI and turned into draft quote line items — blueprints (quantities from the plan), supplier quotes, invoices.</p>
       <div id="aimsg"></div>
-      ${has ? '<p class="okmsg">✓ API key is set on this device.</p>' : '<p class="err">No API key set — extraction is disabled until you add one.</p>'}
-      <label class="f">Anthropic API key</label>
-      <input id="aikey" type="password" autocomplete="off" placeholder="sk-ant-…">
-      <button class="btn block" onclick="App.aiSaveKey()">Save key on this device</button>
-      ${has ? '<button class="btn danger block mt" onclick="App.aiClearKey()">Remove key</button>' : ''}
-      <p class="muted small mt">The key is stored only in this browser's localStorage. It never leaves your device except in direct calls to api.anthropic.com when you tap "Extract with AI". Each extraction uses a small amount of your own Anthropic API credit. Get a key at console.anthropic.com → API keys.</p>
+      <label class="f">AI provider</label>
+      <select id="aiprov" onchange="App.aiProvider(this.value)">
+        ${RondorAI.PROVIDER_IDS.map(id =>
+          `<option value="${id}" ${id === prov ? 'selected' : ''}>${RondorAI.PROVIDERS[id].label}</option>`).join('')}
+      </select>
+      ${cfg.note ? `<p class="flag mt">${esc(cfg.note)}</p>` : ''}
+      ${cfg.needsKey ? `
+        ${has ? '<p class="okmsg">✓ API key is set on this device.</p>' : '<p class="err">No API key set — extraction is disabled until you add one.</p>'}
+        <label class="f">${esc(cfg.keyLabel)}</label>
+        <input id="aikey" type="password" autocomplete="off" placeholder="${esc(cfg.keyHint)}">
+        <button class="btn block" onclick="App.aiSaveKey()">Save key on this device</button>
+        ${has ? '<button class="btn danger block mt" onclick="App.aiClearKey()">Remove key</button>' : ''}
+      ` : '<p class="okmsg">✓ No API key needed — Ollama runs on your own computer.</p>'}
+      <div class="row mt">
+        <div style="flex:1;min-width:140px"><label class="f">Model</label>
+          <input id="aimodel" type="text" autocomplete="off" value="${esc(RondorAI.getModel())}" placeholder="${esc(cfg.defaultModel)}"></div>
+        ${prov === 'ollama' ? `<div style="flex:1;min-width:140px"><label class="f">Ollama address</label>
+          <input id="aiollama" type="text" autocomplete="off" value="${esc(RondorAI.getOllamaUrl())}"></div>` : ''}
+      </div>
+      <button class="btn sm ghost" onclick="App.aiSaveModel()">Save model${prov === 'ollama' ? ' &amp; address' : ''}</button>
+      ${cfg.pdfNote ? `<p class="muted small mt">${esc(cfg.pdfNote)}</p>` : ''}
+      <p class="muted small mt">${cfg.needsKey ? esc(cfg.keyHelp || '') + ' ' : ''}Keys are stored only in this browser's localStorage and are only ever sent to that provider when you tap "Extract with AI". Each extraction uses a small amount of your own API credit (Ollama is free).</p>
     </div>`, '#/more');
 });
 
@@ -1195,12 +1218,25 @@ Object.assign(window.App, {
     } catch (e) { msg.innerHTML = `<p class="err">${esc(e.message)}</p>`; }
   },
   /* ---- AI settings ---- */
+  aiProvider(id) {
+    RondorAI.setProvider(id);
+    routes['ai']();
+  },
   aiSaveKey() {
     const v = $('#aikey').value.trim();
-    if (!v) { $('#aimsg').innerHTML = '<p class="err">Paste your Anthropic API key first.</p>'; return; }
+    const label = RondorAI.PROVIDERS[RondorAI.getProvider()].keyLabel || 'API key';
+    if (!v) { $('#aimsg').innerHTML = `<p class="err">Paste your ${esc(label)} first.</p>`; return; }
     RondorAI.setKey(v);
     $('#aimsg').innerHTML = '<p class="okmsg">✓ Key saved on this device.</p>';
     setTimeout(() => { if (location.hash === '#/ai') routes['ai'](); }, 900);
+  },
+  aiSaveModel() {
+    const m = $('#aimodel');
+    if (m) RondorAI.setModel(m.value);
+    const u = $('#aiollama');
+    if (u) RondorAI.setOllamaUrl(u.value);
+    const msg = $('#aimsg');
+    if (msg) msg.innerHTML = '<p class="okmsg">✓ Saved.</p>';
   },
   aiClearKey() { RondorAI.setKey(''); routes['ai'](); }
 });

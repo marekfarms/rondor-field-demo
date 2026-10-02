@@ -18,10 +18,16 @@ To reset, clear the site's localStorage (or use a private window).
 
 ### Optional: AI document extraction
 
-**More → 🤖 AI extraction.** Paste your own Anthropic API key — it is stored
-only in that browser's localStorage and is never sent anywhere except directly
-to `api.anthropic.com` when you tap **Extract with AI**. Each extraction uses
-a small amount of your own Anthropic API credit.
+**More → 🤖 AI extraction.** Pick a provider — **Anthropic**, **OpenAI**,
+**NVIDIA NIM**, or **Ollama (local)** — then paste that provider's API key
+(Ollama needs no key). Keys are stored only in that browser's localStorage,
+one per provider, and are only ever sent to the active provider's host when
+you tap **Extract with AI**. Each extraction uses a small amount of your own
+API credit (Ollama is free). Notes: OpenAI and NVIDIA read images only — for
+PDFs use Anthropic or convert pages to JPG/PNG first. Ollama runs on your own
+computer, so extraction only works when the app is opened on that same machine
+(it will not work from a phone). Model name (and Ollama address) are editable
+in the same screen.
 
 With a key set: **📁 Docs** → park a PDF/JPG/PNG (blueprint, supplier quote,
 invoice, max 20 MB), open it, tap **Extract with AI**, review and correct
@@ -128,8 +134,9 @@ You only need to create the project and paste two keys.
   the first visit.
 - **Documents:** owner-only page for parking PDFs/JPGs/PNGs against jobs or
   quotes (IndexedDB — files stay on the device). Optional AI extraction via
-  the owner's own Anthropic API key (browser-direct call, review screen
-  before anything is applied, extracted lines priced as-is with no markup).
+  the owner's own API key for Anthropic, OpenAI, NVIDIA NIM, or local Ollama
+  (browser-direct call, review screen before anything is applied, extracted
+  lines priced as-is with no markup).
 - **Estimating logic** replicates the 2026 workbook exactly: 8% material
   markup (services unmarked), per-job O&P (copper/WWS/LDS 12%, watermain 15%,
   abandonments 10%, catchbasins 10%, manholes 15%, admin permits 10%),

@@ -182,6 +182,67 @@ const AI = sandbox.window.RondorAI;
   try { await AI.extract({ blob: { size: 1 }, fileName: 'x.pdf', mime: 'application/pdf' }); ok(false, '401 throws'); }
   catch (e) { ok(/rejected by Anthropic/.test(e.message), '401 → friendly key message'); }
 
+  console.log('4b. AI providers (Anthropic/OpenAI/NVIDIA/Ollama)');
+  ok(AI.getProvider() === 'anthropic', 'default provider is anthropic');
+  ok(JSON.stringify(AI.PROVIDER_IDS) === JSON.stringify(['anthropic','openai','nvidia','ollama']),
+    'four providers registered');
+  ok(AI.PROVIDERS.nvidia.apiUrl === 'https://integrate.api.nvidia.com/v1/chat/completions',
+    'NVIDIA uses NIM chat completions endpoint');
+  ok(/vision/i.test(AI.PROVIDERS.nvidia.defaultModel) || /llama-3.2-90b-vision/.test(AI.PROVIDERS.nvidia.defaultModel),
+    'NVIDIA default model is vision-capable', AI.PROVIDERS.nvidia.defaultModel);
+  ok(AI.PROVIDERS.openai.defaultModel === 'gpt-4o', 'OpenAI default model gpt-4o');
+  ok(AI.PROVIDERS.ollama.defaultBaseUrl === 'http://localhost:11434', 'Ollama default base URL');
+  // per-provider key isolation
+  AI.setProvider('openai');
+  ok(!AI.hasKey(), 'openai has no key initially');
+  AI.setKey('sk-openai-test');
+  ok(AI.getKey() === 'sk-openai-test', 'openai key round-trips');
+  AI.setProvider('anthropic');
+  ok(AI.getKey() === 'sk-ant-test', 'anthropic key untouched by openai key');
+  // OpenAI extract shape
+  AI.setProvider('openai');
+  fetchCalls.length = 0;
+  fetchHandler = async () => ({ ok: true, status: 200,
+    json: async () => ({ choices: [{ message: { content: JSON.stringify(modelJson) } }] }) });
+  const oaiOut = await AI.extract({ blob: { size: 100 }, fileName: 'photo.jpg', mime: 'image/jpeg' });
+  ok(oaiOut.job_name === '636 Dudley — sewer', 'openai extract returns normalized data');
+  const oaiCall = fetchCalls[0];
+  const oaiBody = JSON.parse(oaiCall.opts.body);
+  ok(oaiCall.url === 'https://api.openai.com/v1/chat/completions', 'posts to OpenAI chat completions');
+  ok(oaiCall.opts.headers['Authorization'] === 'Bearer sk-openai-test', 'sends Bearer key header');
+  ok(oaiBody.response_format && oaiBody.response_format.type === 'json_object', 'requests json_object response format');
+  ok(oaiBody.messages[1].content.some(c => c.type === 'image_url'), 'sends image_url vision block');
+  // OpenAI refuses PDFs with a friendly note
+  try { await AI.extract({ blob: { size: 100 }, fileName: 'plan.pdf', mime: 'application/pdf' }); ok(false, 'openai PDF rejected'); }
+  catch (e) { ok(/images only|convert/i.test(e.message), 'openai PDF → friendly images-only note'); }
+  // NVIDIA shares the OpenAI-compatible path
+  AI.setProvider('nvidia');
+  AI.setKey('nvapi-test');
+  fetchCalls.length = 0;
+  await AI.extract({ blob: { size: 100 }, fileName: 'photo.png', mime: 'image/png' });
+  ok(fetchCalls[0].url === 'https://integrate.api.nvidia.com/v1/chat/completions', 'nvidia posts to NIM endpoint');
+  ok(fetchCalls[0].opts.headers['Authorization'] === 'Bearer nvapi-test', 'nvidia sends Bearer key');
+  // 401 on NVIDIA names the provider
+  fetchHandler = async () => ({ ok: false, status: 401, text: async () => '{"message":"invalid"}' });
+  try { await AI.extract({ blob: { size: 1 }, fileName: 'x.jpg', mime: 'image/jpeg' }); ok(false, 'nvidia 401 throws'); }
+  catch (e) { ok(/NVIDIA/.test(e.message), 'nvidia 401 → names NVIDIA'); }
+  // Ollama: no key needed, unreachable → friendly local-machine note
+  AI.setProvider('ollama');
+  ok(AI.hasKey(), 'ollama needs no key');
+  fetchCalls.length = 0;
+  fetchHandler = async () => { throw new Error('network down'); };
+  try { await AI.extract({ blob: { size: 100 }, fileName: 'photo.jpg', mime: 'image/jpeg' }); ok(false, 'ollama unreachable throws'); }
+  catch (e) { ok(/Ollama/i.test(e.message) && /same machine|same computer/i.test(e.message), 'ollama unreachable → friendly local note'); }
+  ok(fetchCalls[0].url === 'http://localhost:11434/api/chat', 'ollama posts to local /api/chat');
+  // legacy single-key install still works for anthropic
+  AI.setProvider('anthropic');
+  AI.setKey('');
+  lsData['rondor_anthropic_key'] = 'legacy-key';
+  ok(AI.getKey() === 'legacy-key', 'legacy rondor_anthropic_key still honored');
+  delete lsData['rondor_anthropic_key'];
+  AI.setKey('sk-ant-test');
+  ok(AI.getKey() === 'sk-ant-test', 'provider restored to anthropic');
+
   console.log('5. Worker isolation (code inspection)');
   const storeSrc = fs.readFileSync(path.join(DIR, 'assets/store.js'), 'utf8');
   // the worker branch of myJobs projects exactly these fields — assert the literal shape
